@@ -1,0 +1,101 @@
+---
+title: "XGBoost"
+author: "G7"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library(knitr)
+library(ropls)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(pls)
+library(tibble) 
+library(caret)
+library(randomForest)
+library(ranger)
+library(xgboost)
+library(tidyverse)
+library(caret)
+library(purrr)
+```
+# VARIABLE SELECTION
+
+```{r}
+df <- read_excel("df_definitivo-2.xlsx", sheet = "Copia de datos")
+rownames(df) = df$id
+df$Afectacion_ganglionar = as.numeric(df$Afectacion_ganglionar)
+df$Afectacion_metastasica = as.numeric(df$Afectacion_metastasica)
+df$Tamaño_tumor = as.numeric(df$Tamaño_tumor)
+df$Grado_tox = as.numeric(df$Grado_tox)
+df$SII_pre = log(df$SII_pre)
+df$SII_1C = log(df$SII_1C)
+df$SII_2C = log(df$SII_2C)
+df$SII_1eval = log(df$SII_1eval)
+
+variables_inutiles = c("Anciano", "Peso", "Talla", "SG", "SG_cens", "SLP", "SLP_cens", "Tipo_tox", "NLR2C_corte4o5")
+df2 = select(df, -all_of(variables_inutiles))
+```
+
+# FIRST EVAL REGRESSION
+
+```{r}
+X1_1 <- df2[, 2:49]
+X1_2 <- df2[, 61:67]
+
+X <- bind_cols(X1_1, X1_2)
+X <- data.frame(scale(X, center = TRUE, scale = TRUE))
+
+X$pri_eval_num_ok <- df2$pri_eval_num_ok
+```
+
+```{r}
+X <- 
+  X %>% 
+  select(-pri_eval_num_ok) %>% 
+  as.matrix() %>% 
+  xgb.DMatrix(data = ., label = X$pri_eval_num_ok)
+
+X
+```
+```{r}
+modelo <- xgboost(data = X, 
+                           objective = "reg:linear",
+                           nrounds = 10, max.depth = 2, eta = 0.3, nthread = 2)
+```
+```{r}
+predicciones <- predict(modelo, X)
+head(predicciones)
+```
+
+# BEST RESPONSE REGRESSION
+
+```{r}
+
+X2 = df2[,2:67]
+X2 <- data.frame(scale(X2, center = TRUE, scale = TRUE))
+X2$mejor_resp_num_ok <- df2$mejor_resp_num_ok
+
+```
+
+```{r}
+X2 <- 
+  X2 %>% 
+  select(-mejor_resp_num_ok) %>% 
+  as.matrix() %>% 
+  xgb.DMatrix(data = ., label = X2$mejor_resp_num_ok)
+
+X2
+```
+
+```{r}
+modelo2 <- xgboost(data = X2, 
+                           objective = "reg:linear",
+                           nrounds = 10, max.depth = 2, eta = 0.3, nthread = 2)
+```

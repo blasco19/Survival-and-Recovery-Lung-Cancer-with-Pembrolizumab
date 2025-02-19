@@ -1,0 +1,374 @@
+---
+title: "Data preprocessing"
+author: "Group 7"
+date: "2024-03-24"
+output: 
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, self_contained = FALSE)
+library(readxl)
+library(mice)
+library(dplyr)
+library(tidyr)
+library(openxlsx)
+```
+
+# TREATMENT
+
+## Import the data:
+
+```{r warning=FALSE}
+datos <- read_excel("Base_Pembro_1L_febrero_24__v2.xlsx", sheet = "datos")
+```
+
+We delete individuals 17 and 21 because of their missing values:
+
+```{r}
+datos <- datos[-c(17, 21), ]
+```
+
+
+## We combine repeated columns:
+
+```{r warning=FALSE}
+datos <- datos %>%
+  mutate(estudios = coalesce(`Estudios...14`, `Estudios...29`)) %>%
+  select(-`Estudios...14`, -`Estudios...29`)
+
+datos <- datos %>%
+  mutate(est_civil = coalesce(`Est_civil...15`, `Est_civil...31`)) %>%
+  select(-`Est_civil...15`, -`Est_civil...31`)
+
+datos <- datos %>%
+  mutate(hogar = coalesce(`Comp_hogar...16`, `Comp_hogar...32`)) %>%
+  select(-`Comp_hogar...16`, -`Comp_hogar...32`)
+
+datos <- datos %>%
+  mutate(MOOSs = coalesce(`MOSs...17`, `MOSs...33`)) %>%
+  select(-`MOSs...17`, -`MOSs...33`)
+
+datos <- datos %>%
+  mutate(ansiedad = coalesce(`Ansiedad...18`, `Ansiedad...36`)) %>%
+  select(-`Ansiedad...18`, -`Ansiedad...36`)
+
+datos <- datos %>%
+  mutate(depresion = coalesce(`Depresion...19`, `Depresion...37`)) %>%
+  select(-`Depresion...19`, -`Depresion...37`)
+
+datos <- datos %>%
+  mutate(MNA = coalesce(`MNA...20`, `MNA...27`)) %>%
+  select(-`MNA...20`, -`MNA...27`)
+```
+
+## We eliminate variables that are not useful:
+
+Elderly variables:
+
+```{r}
+datos <- datos %>% select(-G8, -Audicion, -Barthel, -Lawton_Brody, -SPPB, -Caida_6m, -Pfeiffer, -Mini_mental, -Social_Gijon, -Yesavage,-CIRS, -Charlson,-Polifarmacia,
+                          -Sd_geriatr, -Clasif_geriatr_SIOG1, -Clasif_geriatr_Balducci, -Observaciones, -`CD4+_C_CD45`, -`CD45+_C`, -CD3_C_Leuc, -LDH_PE, -Prot_PE,
+                          -Alb_PE, -Hb_PE, -Leucoc_PE, -Neutr_PE,-Linf_PE, -Plaq_PE, -NLR_PE, -`NLRPE_corte 4`, -`NLRPE_corte 5`, - PLR_PE, -PNI_PE, -SII_PE)
+```
+
+Dates:
+
+```{r}
+datos <- datos %>% select(-Fecha_SLP,-Fecha_últ_control,-Fecha_exitus,-Fecha_SG,-Fecha_nac, -Fecha_dx,-Fecha_inicio_pem)
+```
+
+Concret variables:
+
+```{r}
+datos <- datos %>% select(-Estado_mut,-Tipo_mut_Tej,-Biopsia_liq,-Tipo_mut_Liq)
+```
+
+## Changing of some names:
+
+```{r}
+names(datos)[names(datos) == "Joven(0)_Anciano(1)"] <- "Anciano"
+names(datos)[names(datos) == "%_perd_peso"] <- "Porcentaje_perdpeso"
+names(datos)[names(datos) == "PD-L1"] <- "PD_L1"
+names(datos)[names(datos) == "1ª_eval"] <- "primera_eval"
+names(datos)[names(datos) == "1ªeval_num"] <- "primera_eval_num"
+names(datos)[names(datos) == "Toxicidad_si/no"] <- "Toxicidad"
+names(datos)[names(datos) == "Progresión_sí/no"] <- "Progresion"
+names(datos)[names(datos) == "2ªL_sí/no"] <- "segunda_eval"
+names(datos)[names(datos) == "Exitus_sí/no"] <- "Exitus"
+names(datos)[names(datos) == "T"] <- "Tamaño_tumor"
+names(datos)[names(datos) == "N"] <- "Afectacion_ganglionar"
+names(datos)[names(datos) == "M"] <- "Afectacion_metastasica"
+```
+
+# STUDY OF MISSING VALUES:
+
+```{r}
+tabla_faltantes = datos %>%
+  summarise(across(everything(), ~mean(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Columna", values_to = "Porcentaje_NA") %>%
+  mutate(Porcentaje_NA = Porcentaje_NA * 100)
+as.data.frame(tabla_faltantes[order(tabla_faltantes$Porcentaje_NA, decreasing = TRUE),])
+```
+
+Our limit is 23%, so we eliminate that variables that overcome the limit.
+
+```{r}
+variables_a_eliminar <- tabla_faltantes %>%
+  filter(Porcentaje_NA > 23) %>%
+  pull(Columna)
+
+df <- datos %>%
+  select(-one_of(variables_a_eliminar))
+```
+
+
+```{r}
+tabla_faltantes = df %>%
+  summarise(across(everything(), ~mean(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Columna", values_to = "Porcentaje_NA") %>%
+  mutate(Porcentaje_NA = Porcentaje_NA * 100)
+as.data.frame(tabla_faltantes[order(tabla_faltantes$Porcentaje_NA, decreasing = TRUE),])
+```
+
+
+
+# IMPUTATION:
+
+We are going to use library **mice**. 
+
+```{r}
+tipos_var <- data.frame(Columna = names(df))
+tipos_var$Tipo <- sapply(df, function(x) class(x)[1])
+tipos_var
+```
+
+As we can see, we have both numerical and categorical variables, so we are interested in transforming these categorical variables into factors to be able to impute, even some numerical variables, through the mean method.
+
+```{r}
+df$Idpac <- as.factor(df$Idpac)
+df$Histologia <- as.factor(df$Histologia)
+df$Tamaño_tumor <- as.factor(df$Tamaño_tumor)
+df$Afectacion_ganglionar <- as.factor(df$Afectacion_ganglionar)
+df$Afectacion_metastasica <- as.factor(df$Afectacion_metastasica)
+df$Estadio <- as.factor(df$Estadio)
+df$Estatinas <- as.factor(df$Estatinas)
+df$primera_eval_num <- as.factor(df$primera_eval_num)
+df$Mejor_resp_num <- as.factor(df$Mejor_resp_num)
+df$Tipo_tox <- as.factor(df$Tipo_tox)
+df$Grado_tox <- as.factor(df$Grado_tox)
+df$Motivo_inter <- as.factor(df$Motivo_inter)
+df$p_peso_no_sí <- as.factor(df$p_peso_no_sí)
+df$Hab_tabaq <- as.factor(df$Hab_tabaq)
+df$NLR1C_corte4 <- as.factor(df$NLR1C_corte4)
+df$NLR1C_corte5 <- as.factor(df$NLR1C_corte5)
+df$Histología_num <- as.factor(df$Histología_num)
+df$Estadio_num <- as.factor(df$Estadio_num)
+df$Toxicidad <- as.factor(df$Toxicidad)
+df$Interrupc_tto <- as.factor(df$Interrupc_tto)
+df$Enf_neurod <- as.factor(df$Enf_neurod)
+df$Sexo <- as.factor(df$Sexo)
+df$ECOG <- as.factor(df$ECOG)
+df$Progresion <- as.factor(df$Progresion)
+df$Cardiop <- as.factor(df$Cardiop)
+df$Diabetes <- as.factor(df$Diabetes)
+```
+
+
+```{r}
+tipos_var2 <- data.frame(Columna = names(df))
+tipos_var2$Tipo <- sapply(df, function(x) class(x)[1])
+tipos_var2
+```
+
+We can see the distribution of missing values:
+
+```{r}
+patrones = md.pattern(df, rotate.names = TRUE)
+```
+
+## Mean method:
+
+```{r}
+imputed_data1 <- mice(df %>% 
+                        select(-Idpac,-Histologia,-Afectacion_ganglionar, -Afectacion_metastasica,-Estadio,-Estatinas,-primera_eval_num, -Mejor_resp_num,
+                               -Tipo_tox, -Tamaño_tumor, -Grado_tox, -Motivo_inter, -p_peso_no_sí, -Hab_tabaq, -NLR1C_corte4, -NLR1C_corte5,-Histología_num,
+                               -Estadio_num, -Toxicidad,-Interrupc_tto,-Enf_neurod,-Sexo,-ECOG, -Progresion, -Cardiop, -Diabetes),
+                      method = "mean", print = FALSE)
+df_imputado1 <- complete(imputed_data1)
+df_imputado1
+
+```
+
+
+```{r}
+df_imputado1$Edad_dx <- round(df_imputado1$Edad_dx, 0)
+df_imputado1$LDH <- round(df_imputado1$LDH, 0)
+df_imputado1$LDH <- round(df_imputado1$LDH, 0)
+df_imputado1$Exp_tab <- round(df_imputado1$Exp_tab, 0)
+df_imputado1$Col_total <- round(df_imputado1$Col_total, 0)
+df_imputado1$Leucoc_1C <- round(df_imputado1$Leucoc_1C, 0)
+df_imputado1$Neutr_1C <- round(df_imputado1$Neutr_1C, 0)
+df_imputado1$Linf_1C <- round(df_imputado1$Linf_1C, 0)
+df_imputado1$Plaq_1C <- round(df_imputado1$Plaq_1C, 0)
+
+df_imputado1$Prot_1C <- round(df_imputado1$Prot_1C, 1)
+df_imputado1$Alb_1C <- round(df_imputado1$Alb_1C, 1)
+df_imputado1$Hb_1C <- round(df_imputado1$Hb_1C, 1)
+df_imputado1$Prot_tot <- round(df_imputado1$Prot_tot, 1)
+df_imputado1$Albumina <- round(df_imputado1$Albumina, 1)
+
+df_imputado1$Porcentaje_perdpeso <- round(df_imputado1$Porcentaje_perdpeso, 4)
+
+df_imputado1$NLR_pre <- round(df_imputado1$NLR_pre, 2)
+df_imputado1$PLR_pre <- round(df_imputado1$PLR_pre, 2)
+df_imputado1$PNI_pre <- round(df_imputado1$PNI_pre, 2)
+df_imputado1$ALI_pre <- round(df_imputado1$ALI_pre, 2)
+df_imputado1$SII_pre <- round(df_imputado1$SII_pre, 2)
+df_imputado1$NLR_1C <- round(df_imputado1$NLR_1C, 2)
+df_imputado1$PLR_2C <- round(df_imputado1$PLR_2C, 2)
+df_imputado1$SII_2C <- round(df_imputado1$SII_2C, 2)
+
+```
+
+## Cart method:
+
+```{r}
+imputed_data2 <- mice(df %>% 
+                        select(Idpac,Histologia,Afectacion_ganglionar,Afectacion_metastasica,Estadio,Estatinas,primera_eval_num,Mejor_resp_num,Tipo_tox,
+                               Tamaño_tumor,Grado_tox,Motivo_inter, NLR1C_corte4, NLR1C_corte5, Histología_num, Estadio_num, Toxicidad,Interrupc_tto,
+                               Enf_neurod,Sexo, ECOG, Progresion, Cardiop, Diabetes),
+                      method = "cart", print = FALSE)
+df_imputado2 <- complete(imputed_data2)
+df_imputado2
+```
+
+
+
+```{r}
+redondear = c("Idpac","Histologia","Afectacion_ganglionar","Afectacion_metastasica","Estadio","Estatinas","primera_eval_num","Mejor_resp_num",
+              "Tipo_tox","Tamaño_tumor","Grado_tox","Motivo_inter","NLR1C_corte4","NLR1C_corte5","Histología_num","Estadio_num","Toxicidad","Interrupc_tto",
+              "Enf_neurod","Sexo","ECOG","Progresion","Cardiop","Diabetes")
+
+sapply(df_imputado2[redondear], class)
+
+df_imputado2[redondear] <- lapply(df_imputado2[redondear], as.numeric)
+
+df_imputado2[redondear] <- round(df_imputado2[redondear], 0)
+```
+
+```{r}
+df_imputado2 <- lapply(df_imputado2, as.factor)
+```
+
+
+
+```{r}
+df_completo <- cbind(df_imputado1, df_imputado2)
+```
+
+## Create variables response as factor/numerical:
+
+```{r}
+asignar_valor_primera_eval <- function(valor) {
+  if (valor == "RP") {
+    return(1)
+  } else if (valor %in% c("PS", "EE")) {
+    return(2)
+  } else if (valor == "PE") {
+    return(3)
+  } else {
+    return(NA)  
+  }
+}
+
+df_completo <- df_completo %>% 
+  mutate(pri_eval_num_ok = sapply(primera_eval, asignar_valor_primera_eval))
+```
+
+```{r}
+asignar_valor_mejor_resp <- function(valor) {
+  if (valor == "RC") {
+    return(0)
+  } else if (valor == "RP") {
+    return(1)
+  } else if (valor == "EE") {
+    return(2)
+  } else if (valor == "PE") {
+    return(3)
+  } else {
+    return(NA)  # Manejo de otros valores, si es necesario
+  }
+}
+
+df_completo <- df_completo %>% 
+  mutate(mejor_resp_num_ok = sapply(Mejor_resp, asignar_valor_mejor_resp))
+```
+
+
+
+# ANÁLISIS DESCRIPTIVO:
+
+
+```{r}
+
+columnas_numericas <- sapply(df_completo, is.numeric)
+
+for (columna in names(df_completo[columnas_numericas])) {
+  cat("Variable:", columna, "\n")
+  cat("Summary:\n")
+  print(summary(df_completo[[columna]]))
+  
+  cat("Histogram:\n")
+  hist(df_completo[[columna]], main = paste("Histogram of", columna), xlab = columna)
+  
+  cat("Boxplot:\n")
+  boxplot(df_completo[[columna]], main = paste("Boxplot of", columna))
+
+  cat("Density graph:\n")
+  plot(density(df_completo[[columna]]), main = paste("Density of", columna))
+  
+  cat("\n")
+}
+
+```
+
+
+```{r}
+columnas_categoricas <- sapply(df_completo, is.factor)
+
+for (columna in names(df_completo[columnas_categoricas])) {
+  cat("Variable:", columna, "\n")
+  cat("Frequency:\n")
+  print(table(df_completo[[columna]]))
+  
+  cat("Bar graphic:\n")
+  barplot(table(df_completo[[columna]]), main = paste("Bar graphic of", columna))
+  
+  cat("Pie chart:\n")
+  pie(table(df_completo[[columna]]), main = paste("Pie chart of", columna))
+  
+  cat("\n")
+}
+
+```
+
+
+```{r}
+# ruta_archivo <- "C:/Users/magob/Desktop/PROYECTO/df_definitivo.xlsx"
+# 
+# write.xlsx(df_completo, file = ruta_archivo, rowNames = TRUE)
+# 
+# if (file.exists(ruta_archivo)) {
+#   cat("¡Los datos se han guardado exitosamente en", ruta_archivo, "!\n")
+# } else {
+#   cat("Hubo un problema al guardar los datos. Por favor, verifica la ruta y el nombre del archivo.\n")
+# }
+```
+
