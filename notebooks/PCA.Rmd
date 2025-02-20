@@ -1,0 +1,555 @@
+---
+title: "PCA"
+author: "Group 7"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(readxl)
+library(mice)
+library(FactoMineR)
+library(factoextra)
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+# Data preparation
+
+```{r}
+df <- read_excel("df_definitivo.xlsx", sheet= "datos")
+
+df$SII_pre = log(df$SII_pre)
+df$SII_1C = log(df$SII_1C)
+df$SII_2C = log(df$SII_2C)
+df$SII_1eval = log(df$SII_1eval)
+
+#summary(df)
+descDatos = data.frame("variable" = colnames(df),
+                       "tipo" = c(rep("categorical",2),"numerical",rep("categorical",2),rep("numerical",5),rep("categorical",5),rep("numerical",34), "categorical",
+                                  rep("numerical",3), "categorical",rep("numerical",11),"categorical", "numerical", rep("categorical",5), "numerical", "categorical",
+                                  "numerical",rep("categorical",17)))
+rownames(descDatos) = descDatos$variable
+
+```
+
+# Selection of the number of PCs
+
+We generate the PCA model for all possible principal components (or a high number of them) and select the "optimal" number of principal components (PCs). We will apply centering and scaling within the PCA function itself
+
+```{r}
+res.pca = PCA(df, scale.unit = TRUE, graph = FALSE, ncp = 10, 
+              quali.sup = which(descDatos$tipo == "categorical"))
+eig.val <- get_eigenvalue(res.pca)
+VPmedio = 100 * (1/nrow(eig.val))
+fviz_eig(res.pca, addlabels = TRUE) +
+  geom_hline(yintercept=VPmedio, linetype=2, color="red")
+kable(eig.val[1:6,])
+K = 5
+res.pca = PCA(df, scale.unit = TRUE, graph = FALSE, ncp = K,
+              quali.sup = which(descDatos$tipo == "categorical"))
+```
+
+Starting from the model with 10 components, we select the most appropriate number of principal components (PCs) using the elbow method but choosing two components more for explain more variability. We select `r K` PCs, which explain `r round(eig.val[K,"cumulative.variance.percent"], 1)`% of the total variability of the data.
+
+# PCA model validation
+
+## T2-Hotelling
+
+The Hotelling's T-squared statistic allows us to identify extreme anomalous values that could be influencing the model, i.e., the creation of the PCs. This statistic is calculated from the scores; therefore, we will also visualize score plots for the selected PCs, along with the plot of the T-squared values using the `r K` PCs and including 95% and 99% confidence limits in orange and red, respectively.
+
+```{r T2, fig.width=10, fig.height=5}
+# Gráfico T2 Hotelling
+misScores = res.pca$ind$coord[,1:K]
+miT2 = colSums(t(misScores**2) / eig.val[1:K,1])
+I = nrow(df)
+F95 = K*(I**2 - 1)/(I*(I - K)) * qf(0.95, K, I-K)
+F99 = K*(I**2 - 1)/(I*(I - K)) * qf(0.99, K, I-K)
+plot(1:length(miT2), miT2, type = "l", xlab = "data", ylab = "T2", main = "T2-Hotelling")
+abline(h = F95, col = "orange", lty = 2, lwd = 2)
+abline(h = F99, col = "red3", lty = 2, lwd = 2)
+anomalas = which(miT2 > F95)
+#anomalas
+# Score plots
+p1 = fviz_pca_ind(res.pca, axes = c(1,2), geom = c("point"), habillage = factor(miT2 > F95))
+p2 = fviz_pca_ind(res.pca, axes = c(1,3), geom = c("point"), habillage = factor(miT2 > F95))
+p3 = fviz_pca_ind(res.pca, axes = c(1,4), geom = c("point"), habillage = factor(miT2 > F95))
+p4 = fviz_pca_ind(res.pca, axes = c(1,5), geom = c("point"), habillage = factor(miT2 > F95))
+p5 = fviz_pca_ind(res.pca, axes = c(2,3), geom = c("point"), habillage = factor(miT2 > F95))
+p6 = fviz_pca_ind(res.pca, axes = c(2,4), geom = c("point"), habillage = factor(miT2 > F95))
+p7 = fviz_pca_ind(res.pca, axes = c(2,5), geom = c("point"), habillage = factor(miT2 > F95))
+p8 = fviz_pca_ind(res.pca, axes = c(3,4), geom = c("point"), habillage = factor(miT2 > F95))
+p9 = fviz_pca_ind(res.pca, axes = c(3,5), geom = c("point"), habillage = factor(miT2 > F95))
+p10 = fviz_pca_ind(res.pca, axes = c(4,5), geom = c("point"), habillage = factor(miT2 > F95))
+
+p1
+p2
+p3
+p4
+p5
+p6
+p7
+p8
+p9
+p10
+```
+
+
+```{r}
+observacion_anomala <- df[anomalas, ]
+
+print(observacion_anomala)
+```
+
+We have identified that individual 25 is anomal if we consider the limit at 95%. We can use the loading plots or variable plots (which are shown later) to understand which variables contribute the most to this observation being anomalous. Another way to find out is through the contribution plot to the Hotelling's T-squared statistic shown below.
+
+```{r T2contrib, warning=FALSE, fig.width=8, fig.height=5}
+contribT2 = function (X, scores, loadings, eigenval, observ, cutoff = 2) {
+  # X is data matrix and must be centered (or centered and scaled if data were scaled)
+  misScoresNorm = t(t(scores**2) / eigenval)
+  misContrib = NULL
+  for (oo in observ) {
+    print(rownames(misScores)[oo])
+    print(misScores[oo,])
+    misPCs = which(as.numeric(misScoresNorm[oo,]) > cutoff)
+    lacontri = sapply(misPCs, function (cc) (misScores[oo,cc]/eigenval[cc])*loadings[,cc]*X[oo,])
+    lacontri = rowSums((1*(sign(lacontri) == 1))*lacontri)
+    misContrib = cbind(misContrib, lacontri)
+  }
+  colnames(misContrib) = rownames(misScoresNorm[observ,])
+  return(misContrib)
+}
+```
+
+
+
+```{r T2contriPlot, warning=FALSE, fig.width=8, fig.height=5}
+datosCE = df[,descDatos$tipo == "numerical"]
+datosCE = datosCE[,setdiff(colnames(datosCE), c("rating", "weight", "cups"))]
+datosCE = scale(datosCE, center = TRUE, scale = TRUE)
+X = as.matrix(datosCE)
+misLoadings = sweep(res.pca$var$coord, 2, sqrt(res.pca$eig[1:K,1]), FUN="/")
+observ_indices = 25
+mycontrisT2 = contribT2(X = X, scores = misScores, loadings = misLoadings, 
+                        eigenval = eig.val[1:K,1], observ = observ_indices,
+                        cutoff = 2)
+
+
+# Plot each individual's contributions
+for (i in 1:ncol(mycontrisT2)) {
+  barplot(mycontrisT2[, i], las = 2, cex.names = 0.5,
+          main = paste("Individual: ", rownames(df)[observ_indices[i]]))
+}
+
+```
+
+```{r}
+observ_indices = 25  
+variable_names = colnames(X)  
+for (i in 1:length(observ_indices)) {
+    individual_index = observ_indices[i]
+    cat("\nContributions for Anomalous Individual:", individual_index, "\n")
+    cat("Variable", "\t", "Contribution", "\n")
+    
+    # Extract contributions for this individual, assuming mycontrisT2 is structured with individuals as columns
+    contributions = mycontrisT2[, i]
+    
+    # Combine variable names and contributions into a matrix and order by contribution descending
+    combined_data <- cbind(variable_names, contributions)
+    ordered_data <- combined_data[order(-as.numeric(combined_data[, 2])), ]  # Sorting by contributions descending
+
+    # Print each variable's contribution, now ordered
+    for (j in 1:nrow(ordered_data)) {
+        cat(ordered_data[j, 1], "\t", ordered_data[j, 2], "\n")
+    }
+}
+
+
+```
+
+### Anomalous Individual: 25
+
+When preparing a report based on the given data about the contributions of each variable to Anomalous Individual 25 in Principal Component Analysis (PCA), it's crucial to contextualize the significance of the contribution values and explain what each variable represents if necessary.
+
+#### Key Variables and Contributions:
+
+Here's a breakdown of some of the most significant variables and their potential implications:
+
+1. **LDH (2.81)**: Lactate dehydrogenase, an enzyme related to tissue damage. High contribution could indicate significant cellular turnover or damage.
+
+2. **Plaquetas (1.41)**: Platelet count. Its prominence could relate to clotting disorders or inflammatory responses.
+
+3. **Plaq_1eval (1.09)** & **Plaq_1C (1.01)**: These variables likely represent platelet counts at specific times or conditions, suggesting a consistent influence of platelet variation on the individual’s profile.
+
+4. **Linf_1eval (0.97)**: Lymphocyte count at the first evaluation. Important for immune system function, its contribution could reflect the individual’s immune response or health status.
+
+5. **Albumina (0.58)**: Albumin levels, which can indicate nutritional status or liver function.
+
+6. **IMC (0.55)**: Body Mass Index, a standard metric for categorizing weight status.
+
+### Analysis:
+
+**High Impact Variables**: Variables such as LDH and Plaquetas that have high contributions might be crucial in defining the physiological or pathological state of the individual. Their elevated values suggest areas that may warrant closer examination or continuous monitoring.
+
+**Consistent Themes**: Observing multiple related variables (like different evaluations of platelets and lymphocytes) contributing significantly suggests that these systems (hematological, immune) are particularly relevant for this individual.
+
+**Lower Contributions but Still Relevant**: Variables like Albumina and IMC, while not as impactful as LDH, still provide essential clues about the individual's health status, such as nutrition and body composition.
+
+#### Conclusion:
+
+This analysis highlights how PCA can be utilized to identify key areas of interest or concern in a subject’s health profile, offering a targeted approach for further investigation or intervention. The contributions from each variable offer a unique insight into the biological and physiological narrative of Anomalous Individual 25, guiding more personalized and focused research or clinical decisions.
+
+
+## SCR
+
+Now we will study the distance to the PCA model using the Sum of Squares Residual (SSR), which will help us detect moderate anomalies, i.e., those observations that are not well explained by the PCA model. Remember that severe anomalies are those detected with the Hotelling's T-squared plot but have a low SSR.
+
+To do this, first, we will calculate the residual matrix and then the SSR from it.
+
+```{r SCR, fig.width=5, fig.height=5}
+myE = X - misScores %*% t(misLoadings) 
+mySCR = rowSums(myE^2)  
+plot(1:length(mySCR), mySCR, type = "l", main = "SCR", 
+     ylab = "SCR", xlab = "Datos", ylim = c(0,50))
+g = var(mySCR)/(2*mean(mySCR))
+h = (2*mean(mySCR)^2)/var(mySCR)
+chi2lim = g*qchisq(0.95, df = h)
+chi2lim99 = g*qchisq(0.99, df = h)
+abline(h = chi2lim, col = "orange", lty = 2, lwd = 2)
+abline(h = chi2lim99, col = "red3", lty = 2, lwd = 2)
+```
+
+As we can see, we did not detect any severe anomalies based on the Sum of Squares Residual.
+
+# Interpretation of the PCA Model
+
+## Individual plots
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,2), geom = c("point", "text"), 
+             habillage = "pri_eval_num_ok", repel = TRUE, labelsize = 2)
+```
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,3), geom = c("point", "text"), 
+             habillage = "pri_eval_num_ok", repel = TRUE, labelsize = 2)
+```
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,4), geom = c("point", "text"), 
+             habillage = "pri_eval_num_ok", repel = TRUE, labelsize = 2)
+```
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,5), geom = c("point", "text"), 
+             habillage = "pri_eval_num_ok", repel = TRUE, labelsize = 2)
+```
+
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,2), geom = c("point", "text"), 
+             habillage = "mejor_resp_num_ok", repel = TRUE, labelsize = 2)
+```
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,3), geom = c("point", "text"), 
+             habillage = "mejor_resp_num_ok", repel = TRUE, labelsize = 2)
+```
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,4), geom = c("point", "text"), 
+             habillage = "mejor_resp_num_ok", repel = TRUE, labelsize = 2)
+```
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,5), geom = c("point", "text"), 
+             habillage = "mejor_resp_num_ok", repel = TRUE, labelsize = 2)
+```
+
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,2), geom = c("point", "text"), repel = TRUE, labelsize = 2,
+             select.ind = list("cos2"=30), habillage = "pri_eval_num_ok", addEllipses = TRUE)
+```
+
+This PCA plot visualizes individuals plotted against the first two principal components (Dim1 and Dim2). Here are some key observations:
+
+1. **Dimension Representation**: The x-axis (Dim1) accounts for 24.4% of the variance, while the y-axis (Dim2) accounts for 18.9%. These two dimensions together explain a significant portion, but not all, of the variability in the data.
+
+2. **Clusters and Ellipses**: The plot includes three ellipses, each likely representing a cluster or a group within the dataset. These ellipses probably correspond to groups that are differentiated based on their scores on the principal components:
+   - The **blue ellipse** on the left side covers individuals that have lower scores on Dim1.
+   - The **green ellipse** in the middle encompasses individuals centered around the origin, indicating average scores on both dimensions.
+   - The **red ellipse** on the right includes individuals with higher scores on Dim1.
+
+3. **Color Coding of Individuals**: Individuals are marked with different symbols and colors:
+   - **Red triangles** (labeled 1),
+   - **Green triangles** (labeled 2),
+   - **Blue squares** (labeled 3).
+   
+   This color coding and shaping could indicate different categories or classes within the data, such as different groups, types, or conditions that these individuals belong to.
+
+4. **Scatter and Distribution**: Most individuals are fairly well distributed across the central part of the plot, but there are outliers, such as the individual labeled "11" on the far left, who is distant from others along Dim1. This individual's position suggests significantly different characteristics compared to the rest.
+
+5. **Interpretation of Axes**: Dim1 and Dim2 could represent underlying factors or combinations of variables that explain the most variance in the data. For instance, Dim1 might be capturing a factor where one end represents one extreme of a characteristic and the other end the opposite.
+
+6. **Statistical Insights**: The plot might be used to identify patterns, clusters, outliers, and relationships between groups. It's also useful for hypothesizing about the underlying variables that might be influencing these principal components.
+
+This type of visualization helps in understanding the major dimensions of variation in the data and how individuals or observations relate to these dimensions. It is particularly useful in exploratory data analysis, clustering, outlier detection, and simplifying multivariate data by reducing its dimensionality while preserving its variability.
+
+
+```{r}
+fviz_pca_ind(res.pca, axes = c(1,2), geom = c("point", "text"), repel = TRUE, labelsize = 2,
+             select.ind = list("cos2"=30), habillage = "mejor_resp_num_ok", addEllipses = TRUE)
+```
+
+This second PCA plot shares the same structure as the first, focusing on individuals plotted against the first two principal components (Dim1 and Dim2). Here's what can be discerned from this plot:
+
+1. **Axes Information**: Similar to the previous plot, Dim1 explains 24.4% of the variance and Dim2 explains 18.1%. These principal components help in visualizing the data in a reduced dimensional space.
+
+2. **Different Clusters and Ellipses**:
+   - The plot includes several ellipses in different colors, each likely delineating a cluster or group based on scores of the principal components:
+     - **Blue ellipse** on the left, mainly in the negative region of Dim1.
+     - **Green ellipse** in the center, where most individuals are clustered around zero on both axes.
+     - **Red ellipse** on the right, in the positive region of Dim1.
+     - **Purple ellipse** extends mostly vertically along Dim2, indicating variance mostly along the second principal component with less emphasis on the first.
+
+3. **Color and Symbol Coding**:
+   - **Red squares** (labeled 0),
+   - **Green triangles** (labeled 1),
+   - **Blue circles** (labeled 2),
+   - **Purple crosses** (labeled 3).
+   
+   This coding likely signifies different categories, conditions, or groups that these individuals are part of. The variety in symbols and colors helps differentiate these categories clearly.
+
+4. **Interpretation of Clusters**:
+   - Each colored ellipse seems to be associated with specific categories of individuals, indicating potential underlying factors that differentiate these groups. For instance, individuals within the purple ellipse, mostly labeled as category "3", show a unique pattern predominantly along Dim2.
+   - Notably, there is some overlap between the green and blue ellipses, suggesting some shared characteristics or lesser differentiation along the principal components analyzed.
+
+5. **Outliers**:
+   - Individual "11", observed previously as an outlier, continues to appear distant from others along Dim1, reinforcing its distinctive characteristics from the rest.
+
+6. **Statistical and Practical Insights**:
+   - As before, this visualization aids in recognizing patterns, relationships, and potential anomalies in the dataset. The clear demarcation of groups can be particularly valuable in understanding group behaviors or characteristics in the dataset.
+   - This type of plot is instrumental in exploratory data analysis, offering a visual summary of complex multivariate relationships in a digestible format.
+
+Overall, the plot is effectively utilized to convey the variability and structure of the data, highlighting how different individuals are distributed across the principal components based on their underlying characteristics.
+
+## Plots of variables
+
+```{r loading, fig.width=5, fig.height=5}
+fviz_pca_var(res.pca, axes = c(1,2), repel = TRUE, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"))
+fviz_pca_var(res.pca, axes = c(1,3), repel = TRUE, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"))
+```
+
+In the previous plots, the variables have been colored according to their contribution to the PCs represented in the plot. In blue, auxiliary numerical variables are shown. These variables were not used for the mathematical derivation of the PCA model but have been projected onto the new component space.
+
+```{r}
+library(FactoMineR)
+library(factoextra)
+
+library(FactoMineR)
+library(factoextra)
+
+# Assuming res.pca is your PCA object
+# Step 1: Access variable contributions
+var_contribs <- res.pca$var$contrib
+
+# Step 2: Filter variables based on a 1.5% contribution threshold on the first two PCs
+contrib_threshold = 2.5
+
+selected_vars_12 <- rownames(var_contribs)[var_contribs[, 1] > contrib_threshold | var_contribs[, 2] > contrib_threshold]
+
+# Plot for axes 1 and 2 with filtered variables
+fviz_pca_var(res.pca, axes = c(1, 2), repel = TRUE, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             select.var = list(name = selected_vars_12))
+
+
+```
+
+
+## Study of the variables that contribute the most to the 1st eval:
+
+```{r}
+df$pri_eval_num_ok <- as.numeric(df$pri_eval_num_ok)
+
+correlaciones <- cor(df$pri_eval_num_ok, res.pca$ind$coord)
+
+correlaciones_ordenadas <- sort(correlaciones, decreasing = TRUE)
+
+print(correlaciones_ordenadas)
+
+```
+
+In the context of your report on PCA (Principal Component Analysis), here's how you can explain the contribution of the variable "1st eval" across the first five principal components based on the values provided:
+
+### Explanation of Contributions:
+
+1. **First Principal Component (PC1) Contribution: 0.22616692**
+   - **1st eval** contributes positively to PC1 with a value of approximately 0.226. This suggests that "1st eval" is a significant factor in this component. A positive contribution means that as the value of "1st eval" increases, the scores on PC1 tend to increase. This component captures a significant amount of the variance related to "1st eval", indicating its importance in the dataset's variance explained by PC1.
+
+2. **Second Principal Component (PC2) Contribution: 0.21458489**
+   - Similar to PC1, "1st eval" also contributes positively to PC2, though slightly less than to PC1. This positive contribution of about 0.215 suggests that "1st eval" is also relevant in explaining the variance in PC2. This indicates that "1st eval" influences another dimension of the data that is orthogonal to the dimension captured by PC1.
+
+3. **Third Principal Component (PC3) Contribution: -0.01776962**
+   - The contribution of "1st eval" to PC3 is negative but very small (approximately -0.018). This minimal contribution indicates that "1st eval" has little to no effect on the variance explained by PC3. The negative sign suggests a slight inverse relationship with this component, but given the magnitude, it is not a significant factor for PC3.
+
+4. **Fourth Principal Component (PC4) Contribution: -0.29261852**
+   - "1st eval" has a moderate negative contribution to PC4, approximately -0.293. This indicates that as the value of "1st eval" increases, the scores on PC4 tend to decrease. This component might represent variance in the data that is inversely related to what "1st eval" measures. The more substantial magnitude compared to PC3 suggests that "1st eval" has a more considerable impact on PC4.
+
+5. **Fifth Principal Component (PC5) Contribution: -0.52015070**
+   - The contribution of "1st eval" to PC5 is significantly negative, the largest in absolute value among the first five components, at about -0.520. This strong negative contribution suggests a prominent inverse relationship with PC5. The component might capture aspects of the data that are distinctly opposite in nature to what is measured or represented by "1st eval".
+
+
+```{r}
+loadings <- res.pca$var$coord
+
+contribuciones <- sweep(loadings, 2, correlaciones, `*`)
+
+contribucion_total <- apply(contribuciones, 1, sum)
+
+contribucion_ordenada <- sort(contribucion_total, decreasing = TRUE)
+
+print(contribucion_ordenada)
+
+```
+
+Based on the contributions of each variable to "1st eval" listed, we can draw a comprehensive conclusion about the relative impact of various clinical and laboratory parameters on this specific evaluation metric in your dataset. Here's a structured conclusion derived from the values provided:
+
+### Positive Contributions:
+Variables that contribute positively indicate a direct relationship with the "1st eval." As these values increase, so does the "1st eval" score, suggesting that these factors enhance or are associated with the criteria defined by "1st eval":
+
+- **High Positive Contributors**: The variables like `SII_1eval`, `NLR_1eval`, and `PLR_1eval` show the strongest positive contributions, all above 0.55. This implies a strong direct correlation with "1st eval," suggesting these inflammation-related markers (Systemic Immune-Inflammation Index, Neutrophil to Lymphocyte Ratio, and Platelet to Lymphocyte Ratio from the first evaluation) are crucial in the assessment or outcome measured by "1st eval".
+- **Moderate Positive Contributors**: Variables such as `SII_2C`, `PLR_2C`, `NLR_2C`, and further down to `Leucoc_1eval` have contributions ranging from about 0.54 to 0.15. These include both cyclical assessments and other clinical parameters, indicating a moderate but significant positive relationship with "1st eval".
+
+### Negative Contributions:
+Variables with negative contributions inversely affect the "1st eval." An increase in these variables typically results in a decrease in the "1st eval" score, which might suggest these factors negatively impact or inversely relate to the conditions assessed by "1st eval":
+
+- **Mildly Negative Contributors**: Variables like `Albumina`, `ALI_pre`, down to `Exp_tab` with contributions from about -0.03 to -0.05 indicate a slight inverse relationship. These might include variables related to baseline health conditions or prior treatments that could inversely impact "1st eval".
+- **Moderately Negative Contributors**: From `Leucoc_tot` at -0.054 to `Prot_2C` at -0.118, these variables show a moderate inverse relationship, possibly highlighting their detrimental impact or the negative association with the evaluation metrics.
+- **Highly Negative Contributors**: Variables like `IMC`, `Linf_2C`, and more extreme cases such as `Hb_1eval` with contributions ranging from -0.21 to -0.45, represent the most significant inverse relationships in the dataset. The presence of these variables in significant amounts correlates strongly with lower "1st eval" scores, pointing to factors like nutritional status, overall health, and other metabolic indicators as critical inversely related components in the assessment.
+
+### Conclusion:
+The comprehensive analysis of variable contributions to "1st eval" reveals a complex interplay of clinical, laboratory, and demographic factors that influence this evaluation. Positive contributors, predominantly related to inflammatory and immune markers, suggest that higher levels of systemic inflammation are closely linked to higher "1st eval" scores. Conversely, negative contributors, often related to general health and metabolic indicators, suggest that poorer baseline health metrics are inversely associated with "1st eval."
+
+This insight provides a robust basis for further investigation into how these variables influence patient assessments in clinical settings, suggesting potential areas for targeted interventions, monitoring, or further research into the prognostic significance of these factors.
+
+```{r}
+variables_numericas <- df[, sapply(df, is.numeric)]
+variables_numericas <- variables_numericas[, !colnames(variables_numericas) %in% "pri_eval_num_ok"] 
+
+correlaciones <- cor(variables_numericas, df$pri_eval_num_ok)
+
+correlaciones <- as.vector(correlaciones)
+
+order_indices <- order(correlaciones, decreasing = TRUE)
+sorted_correlaciones <- correlaciones[order_indices]
+sorted_names <- colnames(variables_numericas)[order_indices]
+
+barplot(sorted_correlaciones, names.arg = sorted_names, col = "#FF00FF", main = "Correlations regarding 1º eval", las=2, cex.names = 0.5)
+```
+
+## Study of the variables that contribute the most to best response:
+
+```{r}
+df$mejor_resp_num_ok <- as.numeric(df$mejor_resp_num_ok)
+
+correlaciones <- cor(df$mejor_resp_num_ok, res.pca$ind$coord)
+
+correlaciones_mejor_respuesta <- sort(correlaciones, decreasing = TRUE)
+
+print(correlaciones_mejor_respuesta)
+```
+
+In your PCA analysis, the contributions of the variable "mejor respuesta" to the first five principal components are insightful for understanding how this variable influences the dataset's variance across different dimensions. Here's a structured explanation for each component's contribution:
+
+### Contributions of "Mejor Respuesta":
+
+1. **First Principal Component (PC1) Contribution: 0.33902239**
+   - "Mejor respuesta" contributes positively and most substantially to PC1, with a value of approximately 0.339. This significant positive contribution implies that "mejor respuesta" is a major factor in explaining the variance captured by this principal component. A higher value of "mejor respuesta" tends to align with higher scores on PC1, suggesting that whatever aspects or aggregate characteristics PC1 represents, they are positively influenced by the "mejor respuesta".
+
+2. **Second Principal Component (PC2) Contribution: 0.21745845**
+   - The contribution to PC2 is also positive but less than that to PC1, indicating that "mejor respuesta" also positively influences this dimension of the data, albeit to a lesser extent. This suggests that there are additional aspects of the data captured by PC2 that relate positively to "mejor respuesta", though these are less dominant than those captured by PC1.
+
+3. **Third Principal Component (PC3) Contribution: -0.08932685**
+   - For PC3, the contribution of "mejor respuesta" is negative, albeit relatively small at approximately -0.089. This minor negative contribution indicates a slight inverse relationship with the third principal component, suggesting that increases in "mejor respuesta" are associated with decreases in the scores for PC3. This component may capture variance in the data inversely related to the factors or conditions positively influenced by "mejor respuesta".
+
+4. **Fourth Principal Component (PC4) Contribution: -0.44461216**
+   - The contribution is significantly negative for PC4, indicating a strong inverse relationship with "mejor respuesta". This substantial negative contribution suggests that the aspects or combinations of variables that PC4 represents are adversely influenced by "mejor respuesta". In practical terms, as "mejor respuesta" increases, the characteristics or factors represented by PC4 tend to decrease.
+
+5. **Fifth Principal Component (PC5) Contribution: -0.49829934**
+   - Similar to PC4, PC5 shows a strong negative contribution from "mejor respuesta", even more so than PC4. This is the largest negative contribution among the first five components, highlighting that the variance captured by PC5 is strongly inversely related to "mejor respuesta". This component likely represents attributes or conditions that are distinctly opposite or negatively impacted by improvements or increases in "mejor respuesta".
+
+
+```{r}
+loadings <- res.pca$var$coord
+
+contribuciones_mejor_respuesta <- sweep(loadings, 2, correlaciones_mejor_respuesta, `*`)
+
+contribucion_total_mejor_respuesta <- apply(contribuciones_mejor_respuesta, 1, sum)
+
+contribucion_ordenada_mejor_respuesta <- sort(contribucion_total_mejor_respuesta, decreasing = TRUE)
+
+print(contribucion_ordenada_mejor_respuesta)
+
+```
+
+To interpret the contributions of each variable to "mejor respuesta" as you presented them, it's clear that a wide range of variables, primarily clinical and laboratory measurements, play roles of varying significance and direction in influencing this outcome. Here’s an explanation suitable for a comprehensive report:
+
+### Positive Contributions to "Mejor Respuesta"
+
+The variables contributing positively show a direct correlation with "mejor respuesta," suggesting that higher values of these variables are associated with better outcomes in terms of the metrics defined by "mejor respuesta."
+
+- **Highest Contributors**: `SII_1eval` (0.551), `NLR_1eval` (0.528), and `SII_2C` (0.523) are the top contributors. These are indices that measure systemic inflammation (Systemic Immune-Inflammation Index and Neutrophil to Lymphocyte Ratio), which could be critical markers in scenarios where immune response plays a significant role in the outcome, such as in certain diseases or treatments.
+- **Significant Impact**: Following closely are other inflammatory markers like `PLR_1eval` and various cell count ratios and counts from both first and second evaluations (`PLR_2C`, `Plaq_2C`, `NLR_2C`, `Neutr_2C`). Contributions around 0.4 to 0.5 indicate these are also highly relevant but less so than the very top contributors.
+- **Moderate Influence**: Variables such as `Leucoc_2C`, `Neutr_1eval`, `PLR_1C`, and others down to `Linf_tot` show moderate positive contributions (0.3 to 0.35). These suggest a reasonable influence where higher levels are somewhat positively correlated with "mejor respuesta".
+
+### Negative Contributions to "Mejor Respuesta"
+
+Variables contributing negatively indicate an inverse relationship with "mejor respuesta," where higher values potentially deteriorate the conditions or outcomes associated with "mejor respuesta."
+
+- **Moderately Negative**: Starting from `Exp_tab` (-0.022) down to `PNI_1C` (-0.229), these variables gradually show increasing adverse effects on "mejor respuesta". It's interesting to note that some nutritional indicators and protein levels are included here, suggesting complex interactions between health status and "mejor respuesta."
+- **Highly Negative**: Variables such as `PNI_1eval`, `IMC` (Body Mass Index), and `Alb_1eval` (Albumin levels in the first evaluation) from -0.264 to -0.315 demonstrate significant negative contributions. These might be critical markers of general health or specific disease states inversely affecting "mejor respuesta".
+- **Most Detrimental**: The variables `Hb_1C` (Hemoglobin level at first cycle), `Alb_2C` (Albumin level at second cycle), down to `N_ciclos` (Number of cycles, -0.544) show the strongest negative impact. The inclusion of hemoglobin and albumin suggests that worse outcomes associated with "mejor respuesta" are significantly influenced by these variables, potentially indicating severe underlying conditions or responses to treatment.
+
+
+```{r}
+# Seleccionar solo las variables numéricas (excluyendo la variable de referencia)
+variables_numericas <- df[, sapply(df, is.numeric)]
+variables_numericas <- variables_numericas[, !colnames(variables_numericas) %in% "mejor_resp_num_ok"] # Excluir la variable de referencia
+
+# Calcular las correlaciones
+correlaciones <- cor(variables_numericas, df$mejor_resp_num_ok)
+
+# Extraer los valores de la matriz de correlaciones
+correlaciones <- as.vector(correlaciones)
+
+order_indices <- order(correlaciones, decreasing = TRUE)
+sorted_correlaciones <- correlaciones[order_indices]
+sorted_names <- colnames(variables_numericas)[order_indices]
+
+barplot(sorted_correlaciones, names.arg = sorted_names, col = "#FF00FF", main = "Correlations regarding Best Response", las=2, cex.names = 0.5)
+```
+
+# scores + individuals
+
+```{r}
+fviz_pca_biplot(res.pca, axes = c(1,2), labelsize = 3,
+                label = "var", repel = TRUE, 
+                col.ind = df$pri_eval_num_ok)
+```
+
+```{r}
+fviz_pca_biplot(res.pca, axes = c(1,2), labelsize = 3,
+                label = "var", repel = TRUE, 
+                col.ind = df$mejor_resp_num_ok)
+```

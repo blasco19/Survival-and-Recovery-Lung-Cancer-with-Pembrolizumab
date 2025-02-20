@@ -1,0 +1,511 @@
+---
+title: "multivariante_proIII"
+author: "David"
+date: "2024-05-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Multivariat Survival Analysis in Lung Cancer Patients Treated with Prelozumb
+
+```{r,include=FALSE,warning=FALSE,error=FALSE}
+library(survival)
+library(dplyr)
+library(boot)
+library(survminer)
+library(car)
+
+```
+
+
+## INTRODUCTION:
+In this study, we analyzed a dataset of 34 lung cancer patients who were treated with Prelozumb. The primary objective is to determine which factors influence the survival of these patients. Various clinical and demographic variables were considered in the analysis, including age, body mass index (BMI), PD-L1 levels, LDH, total proteins, albumin, tobacco exposure, and percentage of weight loss, among others.
+
+- Edad_dx (Age at Diagnosis): This variable represents the age of the patients at the time of lung cancer diagnosis. Age is a critical factor in cancer prognosis and can influence treatment outcomes.
+
+- IMC (Body Mass Index): BMI is included to evaluate the nutritional and health status of patients, which can affect their overall survival and response to cancer therapy.
+
+- Porcentaje_perdpeso (Percentage of Weight Loss): This indicates the percentage of weight loss experienced by the patient before the treatment initiation, serving as an indicator of cancer cachexia and overall health deterioration.
+
+- Exp_tab (Smoking Exposure in Pack-Years): Given the strong association between lung cancer and tobacco use, this variable quantifies the extent of smoking in pack-years, providing insights into the risk profile of each patient.
+
+- PD_L1 (Expression Level): PD-L1 expression levels are measured to determine the likelihood of response to anti-PD-L1 therapies like Prelozumb. Higher levels are often associated with a better response to immunotherapy.
+
+**Lab Values (LDH, Prot_tot, Albumina):**
+
+- LDH (Lactate Dehydrogenase): An enzyme that, when elevated, can indicate tissue damage and has prognostic significance in cancer.
+- Prot_tot (Total Protein) and Albumina (Albumin): These markers of nutritional status and liver function are essential for assessing the patient's general health and potential complications.
+
+**Clinical Dates:**
+
+- Fecha_nac (Date of Birth) and Fecha_dx (Date of Diagnosis): These dates are fundamental for calculating the age at diagnosis and understanding the timeline of each patient's disease progression.
+- Fecha_inicio_pem (Date of Treatment Initiation): The start date of Prelozumb treatment, critical for survival analysis.
+- Fecha_SLP (Date of SLP Event) and Fecha_exitus (Date of Death or Last Follow-up): These endpoints are used to calculate survival times, crucial for the analysis of treatment effectiveness.
+
+**Censoring Indicators (SLP_cens, SG_cens):** These binary variables indicate whether the survival data for SLP (and overall survival, SG) are censored, meaning the event of interest (death or progression) has not been observed during the study period.
+
+
+The analysis will involve transforming these variables appropriately, calculating survival times, and applying statistical models to understand the impact of Prelozumb on patient survival. This R Markdown document will detail the methods, present the statistical findings, and discuss the implications of the results in the context of ongoing cancer research and clinical practice.
+
+
+## Data Preparation
+The following details the data loading and preparation process:
+```{r}
+# Data loading
+datos <- read.csv(file = "./df_supervivencia.csv", header = TRUE)
+
+# Convert date columns to date objects
+datos$Fecha_dx <- as.Date(datos$Fecha_dx, format = "%Y-%m-%d")
+datos$Fecha_SG <- as.Date(datos$Fecha_SG, format = "%Y-%m-%d")
+
+# Calculate survival time in weeks
+datos$Tiempo_Supervivencia <- as.numeric(difftime(datos$Fecha_SG, datos$Fecha_dx, units = "weeks"))
+
+# Convert categorical variables to factors
+datos$Sexo <- factor(datos$Sexo, labels = c("Mujer", "Hombre"))
+datos$Exitus <- factor(datos$Exitus, labels = c("No", "Si"))
+datos$Hab_tabaq <- factor(datos$Hab_tabaq, labels = c("No", "Si", "ex-fumador"))
+datos$Toxicidad <- factor(datos$Toxicidad, labels = c("No", "Si"))
+datos$Progresion <- factor(datos$Progresion, labels = c("No", "Si"))
+
+# Check the first records
+head(datos)
+
+```
+
+## Data Preparation Process Description
+Data Loading: The data is imported from a CSV file containing detailed information about the patients.
+Date Conversion: Columns corresponding to the diagnosis date (Fecha_dx) and the survival event date (Fecha_SG) are converted to date objects to facilitate calculations.
+Survival Time Calculation: Survival time in weeks is calculated by subtracting the diagnosis date from the event date.
+Conversion of Categorical Variables: Several categorical variables are converted to factors with descriptive labels. This includes the patient's sex, whether the patient has died (Exitus), smoking habits (Hab_tabaq), presence of toxicity (Toxicidad), and disease progression (Progresion).
+
+
+
+
+# Exploratory Data Analysis (EDA)
+```{r}
+censura_proporciones <- prop.table(table(datos$SG_cens)) * 100
+censura_proporciones
+```
+## Proportion of Censored Data
+We start by examining the proportion of censored data in our dataset, which indicates the percentage of patients whose survival times are not fully observed.
+67.65% of the data is not censored 
+32.35% of the data is censored
+
+```{r}
+hist(datos$Edad_dx, breaks=seq(40, 85, 5), main="Distribución de Edad al Diagnóstico", xlab="Edad al diagnóstico", ylab="Frecuencia", col="blue", border="black")
+```
+
+## Histogram of Age at Diagnosis
+We also visualize the distribution of age at diagnosis to understand the age demographics of the patients in the study.
+- X-Axis (Edad_dx):
+This axis represents the age in years at the time of diagnosis of the patients.
+Ages are grouped into intervals, which appear to be approximately 5 years each.
+
+- Y-Axis (Frequency):
+This axis indicates the number of patients (frequency) found in each age interval.
+
+- Age Distribution:
+There is a higher concentration of diagnosed patients in the age range between 60 and 70 years.
+The interval with the highest frequency is 65-70 years, with approximately 7 patients.
+The least common age intervals are the extremes, 45-50 years and 75-80 years, each with less than 2 patients.
+
+- Shape of the Distribution:
+The distribution appears to be bimodal, with two clear peaks around 55-60 years and 65-70 years.
+There is a notable drop in frequency around 50-55 years and after 75 years.
+
+```{r}
+# Cross-tabulations of Categorical Variables with Censorship
+sexo_censura <- table(datos$Sexo, datos$SG_cens)
+exitus_censura <- table(datos$Exitus, datos$SG_cens)
+habito_tabaquico_censura <- table(datos$Hab_tabaq, datos$SG_cens)
+toxicidad_censura <- table(datos$Toxicidad, datos$SG_cens)
+progresion_censura <- table(datos$Progresion, datos$SG_cens)
+
+# Grouping Age and Cross-tabulation with Censorship
+datos$Edadg <- cut(datos$Edad_dx, breaks=c(40, 55, 70, 85))
+edad_censura <- table(datos$Edadg, datos$SG_cens)
+
+list(sexo_censura, exitus_censura, habito_tabaquico_censura, toxicidad_censura, progresion_censura, edad_censura)
+
+```
+
+## Cross-tabulations of Categorical Variables with Censorship
+Next, we create cross-tabulations to explore the relationship between categorical variables and the censoring status. This helps in understanding how different factors might be associated with censored observations.
+
+## Grouping Age and Cross-tabulation with Censorship
+To further analyze the effect of age on censorship, we group ages into intervals and cross-tabulate with the censorship status.
+
+- There are more men in the study than women, and the proportion of censorship is similar between both sexes.
+- The majority of patients who died are not censored, which is expected, and the majority of surviving patients are censored, indicating that the event of interest (death) did not occur for them during the follow-up.
+- The highest proportion of censorship is among non-smokers and former smokers, which could indicate either higher survival rates or lower occurrence of the event of interest in these groups.
+- Toxicity is associated with higher censorship, which could indicate that patients with toxicity have a better prognosis or a lower occurrence of the event of interest.
+- The majority of patients with disease progression are not censored, while the majority of patients without progression are censored, suggesting that disease progression is strongly associated with the occurrence of the event of interest.
+
+
+- Age Group (40,55): Mortality and censorship are balanced, with an equal number of deceased and non-deceased patients.
+- Age Group (55,70): The majority of patients have not died, indicating higher survival in this age group.
+- Age Group (70,85): Mortality and censorship are almost balanced, though there is a slight majority of patients whose death has not occurred.
+
+
+## Cox regresion
+To determine which variables are significant in a multivariate survival analysis, we first perform a univariate Cox regression analysis for each individual variable. This allows us to see which variables have a significant association with survival time before including them in a multivariate model.
+```{r}
+# Create the Surv object
+surv_object <- Surv(time = datos$Tiempo_Supervivencia, event = datos$SG_cens)
+
+# List of variables to analyze
+variables <- c("Edad_dx", "IMC", "Porcentaje_perdpeso", "Exp_tab", "PD_L1", 
+               "LDH", "Prot_tot", "Albumina", "Sexo", "Exitus", 
+               "Hab_tabaq", "Toxicidad", "Progresion")
+
+# Cox regression analysis
+univ_results <- lapply(variables, function(var) {
+  formula <- as.formula(paste("surv_object ~", var))
+  model <- coxph(formula, data = datos)
+  return(summary(model))
+})
+
+p_values <- sapply(univ_results, function(result) result$coefficients[, "Pr(>|z|)"])
+names(p_values) <- variables
+p_values
+```
+
+The high variability of p-values can be due to several factors, especially when working with a limited number of samples:
+
+- Sample Size: With only 34 samples, there may not be enough statistical power to detect significant effects.
+- Collinearity: There may be high collinearity between some predictor variables, which can inflate standard errors and make significance tests less powerful.
+- Event Distribution: The distribution of censored events versus observed events can affect the results. If most events are censored, it can be difficult to detect significant associations.
+
+The next step involves addressing these challenges by considering the inclusion of significant variables in a multivariate Cox regression model, adjusting for potential confounders, and ensuring the robustness of the findings through additional diagnostic tests and validation techniques.
+
+
+## Collinearity evaluation
+To evaluate collinearity, we calculate the Variance Inflation Factor (VIF) for the variables in our Cox regression model. VIF values help identify multicollinearity by quantifying how much the variance of a regression coefficient is inflated due to collinearity with other predictors.
+```{r}
+
+vif_cox <- coxph(surv_object ~ Edad_dx + IMC + Porcentaje_perdpeso + Exp_tab + PD_L1 + 
+                 LDH + Prot_tot + Albumina + Sexo + Exitus + 
+                 Hab_tabaq + Toxicidad + Progresion, data = datos)
+vif(vif_cox)
+```
+The warning about the lack of intercept suggests that the model needs adjustments. All VIFs being equal to 1 indicates no multicollinearity detected among the predictor variables in this case. However, this result is suspicious and could be related to convergence issues.
+
+
+
+## Visualizing Survival
+We create Kaplan-Meier survival curves for different groups of categorical variables to visually explore survival patterns.
+
+```{r}
+# Kaplan-Meier curve for Gender
+ggsurvplot(survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo, data = datos), 
+           conf.int = TRUE, 
+           pval = TRUE)
+```
+
+The Kaplan-Meier curve for Sexo (gender) represents the survival probability of patients based on their gender. The following information is presented in the graph:
+- Survival Probability: The y-axis shows the probability of survival, while the x-axis represents time in weeks.
+- Survival Curves: Two curves are plotted:
+    - The red curve represents female patients (Sexo = Woman).
+    - The blue curve represents male patients (Sexo = Man).
+- Confidence Intervals: The shaded areas around the curves represent the 95% confidence intervals for the survival probability.
+- Log-rank Test: The p-value displayed on the plot (p = 0.3) indicates the statistical significance of the difference in survival between the two gender groups. A p-value greater than 0.05 suggests that there is no significant difference in survival between female and male patients.
+
+The Kaplan-Meier curve for gender reveals that the survival probability does not significantly differ between female and male patients, with a p-value of 0.3.
+
+
+```{r}
+# Kaplan-Meier curve for Exitus
+ggsurvplot(survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Exitus, data = datos), 
+           conf.int = TRUE, 
+           pval = TRUE)
+```
+
+The Kaplan-Meier curve for Exitus represents the survival probability of patients based on their Exitus status, which indicates whether the patient has died (Exitus = 1) or not (Exitus = 0). The following information is presented in the graph:
+- Survival Probability: The y-axis shows the probability of survival, while the x-axis represents time in weeks.
+- Survival Curves: Two curves are plotted:
+    - The red curve represents patients who have not died (Exitus = 0).
+    - The blue curve represents patients who have died (Exitus = 1).
+- Confidence Intervals: The shaded areas around the curves represent the 95% confidence intervals for the survival probability.
+- Log-rank Test: The p-value displayed on the plot (p = 0.62) indicates the statistical significance of the difference in survival between the two groups. A p-value greater than 0.05 suggests that there is no significant difference in survival between patients who have died and those who have not.
+
+The Kaplan-Meier curve for Exitus shows that there is no significant difference in survival between patients who have died and those who have not, as indicated by the p-value of 0.62.
+
+
+
+## Adjusting the Cox Model with Selected Variables
+To refine our analysis, we adjusted the Cox regression model using only the variables that seem most relevant and less problematic. This will help identify the variables that have a greater influence on the patients' survival time.
+```{r,warning=FALSE,error=FALSE}
+# Create a Surv object
+surv_object <- Surv(time = datos$Tiempo_Supervivencia, event = datos$SG_cens)
+
+# Fit the Cox regression model with selected variables
+cox_model <- coxph(surv_object ~ Edad_dx + IMC + Exp_tab + PD_L1 + Progresion, data = datos)
+
+# Summary of the model
+summary(cox_model)
+
+```
+Interpretation of Results
+- Age at Diagnosis (Edad_dx): The coefficient is -0.003348 with a p-value of 0.921, indicating that age does not have a significant association with survival time.
+- Body Mass Index (IMC): The coefficient is -0.071789 with a p-value of 0.335, suggesting that BMI also does not have a significant association with survival time.
+- Tobacco Exposure (Exp_tab): The coefficient is -0.0004402 with a p-value of 0.955, indicating a lack of significant association.
+- PD-L1: The coefficient is 0.0046836 with a p-value of 0.846, showing no significant association with survival.
+- Disease Progression (Progresion): The coefficient is -0.9492143 with a p-value of 0.346, suggesting no significant association with survival time.
+
+Model Evaluation
+- Concordance: The concordance index is 0.663 (se = 0.087), indicating a moderate ability of the model to distinguish between individuals who experienced the event and those who did not.
+- Significance Tests:
+    - Likelihood ratio test: p-value = 0.7
+    - Wald test: p-value = 0.8
+    - Score (logrank) test: p-value = 0.7
+    
+These results suggest that none of the variables included in the model have a significant association with the patients' survival time. Additionally, the global significance tests (Likelihood ratio, Wald, and Score) indicate that the model as a whole is not significant.
+
+
+
+## Using Cross-Validation to Evaluate Model Stability
+Given the limited sample size, using cross-validation techniques can help evaluate the stability of the Cox model. Here, we perform bootstrap cross-validation to assess the variability and robustness of the model coefficients.
+```{r,warning=FALSE}
+# Function to fit the Cox model
+cox_model_fn <- function(data, indices) {
+  d <- data[indices,]
+  fit <- coxph(Surv(time = d$Tiempo_Supervivencia, event = d$SG_cens) ~ Edad_dx + IMC + Exp_tab + PD_L1 + Progresion, data = d)
+  return(coef(fit))
+}
+
+# Perform bootstrap cross-validation
+results <- boot(data = datos, statistic = cox_model_fn, R = 300)
+print(results)
+
+```
+
+Interpretation of Cross-Validation Results
+- Bias: The bootstrap results show the bias for each coefficient. A high bias indicates that the coefficient estimates may be unstable.
+- Standard Error: The standard errors are quite large, suggesting high variability in the coefficient estimates.
+
+Specifically:
+- Age at Diagnosis (Edad_dx): The bias is -0.32183531, and the standard error is 4.619188
+- Body Mass Index (IMC): The bias is -0.85255128, and the standard error is 12.736997.
+- Tobacco Exposure (Exp_tab): The bias is -0.06303525, and the standard error is 1.386933
+- PD-L1: The bias is 0.12156926, and the standard error is 2.553455
+- Disease Progression (Progression): The bias is -18.49624057, and the standard error is 127.608605
+
+The cross-validation results indicate that the model coefficients have high standard errors and biases, likely due to the small sample size and inherent variability. 
+
+
+
+## Exploring Alternative and Simplified Models
+To identify significant associations, we attempt to fit a simplified Cox regression model with fewer predictors. This approach helps determine if reducing the model complexity can reveal significant predictors of survival.
+```{r}
+# Fit a simplified Cox model
+cox_model_simplificado <- coxph(surv_object ~ Edad_dx + Progresion, data = datos)
+summary(cox_model_simplificado)
+
+```
+
+- Age at Diagnosis (Edad_dx): The coefficient is -0.005765 with a p-value of 0.866, indicating that age does not have a significant association with survival time.
+- Disease Progression (Progresion): The coefficient is -0.942532 with a p-value of 0.262, suggesting that disease progression also does not have a significant association with survival time.
+
+Model Evaluation
+- Concordance: The concordance index is 0.637 (se = 0.107), indicating a moderate ability of the model to distinguish between individuals who experienced the event and those who did not. However, it is still moderate and not particularly high.
+- Significance Tests:
+    - Likelihood ratio test: p-value = 0.5
+    - Wald test: p-value = 0.5
+    - Score (logrank) test: p-value = 0.5
+These results suggest that neither of the variables (Age at Diagnosis and Disease Progression) has a p-value less than 0.05, indicating no significant associations with survival time. Additionally, the high p-values from the global significance tests (Likelihood ratio, Wald, and Score) suggest that the model as a whole is not significant.
+
+
+
+## Proceeding with the Cox Model Despite Setbacks
+Despite the challenges, we proceed with fitting a Cox regression model with multiple variables to assess their associations with survival time.
+```{r,warning=FALSE}
+# Create the Surv object
+surv_object <- Surv(time = datos$Tiempo_Supervivencia, event = datos$SG_cens)
+
+# Fit the Cox regression model with multiple variables
+cox_mult <- coxph(surv_object ~ Edad_dx + IMC + Porcentaje_perdpeso + Exp_tab + PD_L1 + 
+                  LDH + Prot_tot + Albumina + Sexo + Exitus + 
+                  Hab_tabaq + Toxicidad + Progresion, data = datos)
+
+# Summary of the model
+summary(cox_mult)
+```
+
+- None of the individual variables has a p-value less than 0.05, indicating that they do not significantly predict survival time.
+- Concordance: The model shows a perfect concordance (1), but this is likely an artifact due to the small sample size and high model complexity.
+- Global Tests:
+    - Likelihood ratio test: p-value = 1e-04, suggesting that the model as a whole is significant.
+    - Wald test: p-value = 1, indicating that the variables collectively do not significantly predict survival.
+    - Score (logrank) test: p-value = 0.1, also indicating a lack of significance for the model. 
+
+Despite the high likelihood ratio test significance, the individual variable p-values and the Wald and Score tests suggest that the model's variables are not significant predictors of survival. This discrepancy might be due to the small sample size and the inherent variability.
+
+
+
+## Continuing with Cross-Validation to Evaluate Model Stability and Coefficient Variability
+
+We use bootstrap cross-validation to assess the stability of the Cox regression model and the variability of the coefficients. This method helps us understand how the coefficients vary with different subsets of the data, providing insights into the model's robustness.
+
+```{r,warning=FALSE}
+# Function to fit the Cox model
+cox_model_fn <- function(data, indices) {
+  d <- data[indices,]
+  fit <- coxph(Surv(time = d$Tiempo_Supervivencia, event = d$SG_cens) ~ Edad_dx + IMC + Porcentaje_perdpeso + Exp_tab + PD_L1 + 
+               LDH + Prot_tot + Albumina + Sexo + Exitus + 
+               Hab_tabaq + Toxicidad + Progresion, data = d)
+  return(coef(fit))
+}
+results <- boot(data = datos, statistic = cox_model_fn, R = 150)
+results
+```
+The results of this second Cox model that includes all variables regardless of their importance after the cross validation eschema reflect the great disparity in the values of bias and standard error between variables. As expected due to their significance some variables have a very high error and bias in absolute terms as in the case of the percentage of weight loss or toxicity, while values of other variables suffer hardly any of these metrics (see tobacco exposure or PD_L1).
+
+All these cross-validation results indicate that the model coefficients suggests instability in the coefficients. This instability is common with small sample sizes and potential collinearity issues between all variables. 
+
+
+## Evaluating Proportional Hazards Assumption
+We use diagnostics plots to evaluate the proportional hazards assumption in the Cox regression model. The plot below shows the DFBETA residuals for each variable in the model.
+```{r}
+# Evaluar la proporcionalidad de riesgos
+ggcoxdiagnostics(cox_mult, type = "dfbeta")
+
+```
+
+- X-Axis: Represents the identifiers of the observations in the dataset.
+- Y-Axis: Shows the DFBETA residuals for each variable, representing the change in the model coefficient when an observation is omitted.
+- Shaded Lines (red): Represent the overall trend of the residuals for each variable.
+- Dashed Lines (blue): Indicate the confidence intervals.
+
+*Key Observations*
+
+- Low and Consistent Residuals: Most variables show low and consistent DFBETA residuals, indicating that the majority of observations do not disproportionately influence the model coefficients.
+- Flat Trend Lines: The trend lines are relatively flat and close to zero, suggesting that no single observation is disproportionately influencing the model coefficients.
+- Outliers: Some variables (e.g., IMC, Progresion, ToxicidadSi) have points outside the confidence bands, indicating that these observations have a stronger influence on the model.
+
+
+Detailed Variable Analysis:
+
+- Albumina: The residuals are close to zero, with no significant outliers. This indicates that omitting any single observation does not drastically change the coefficient for albumin.
+- Edad_dx: The age at diagnosis shows consistent residuals close to zero, suggesting a stable influence across all observations. There are no significant outliers affecting the coefficient.
+- Exitus: The residuals for the variable indicating whether the patient has died are also near zero, with a flat trend line. This implies that individual observations are not unduly influencing the coefficient.
+- Exp_tab: Tobacco exposure shows some variability in the residuals but remains within the confidence intervals. The influence of individual observations is not significant.
+- Hab_tabaq: Similar to tobacco exposure, the residuals are consistent and close to zero, indicating minimal influence from individual observations.
+- IMC: The body mass index shows a few observations outside the confidence intervals, indicating potential influential points. These observations might be affecting the coefficient more significantly than others.
+- LDH: Lactate dehydrogenase levels have consistent residuals within the confidence intervals, indicating a stable coefficient with no significant outliers.
+- PD_L1: PD-L1 levels show some variability but remain within the confidence intervals. Individual observations do not appear to disproportionately influence the coefficient.
+- Porcentaje_perdpeso: The percentage of weight loss shows low and consistent residuals, suggesting minimal influence from individual observations.
+- Progresion: Disease progression has several observations outside the confidence intervals, indicating these points may significantly influence the coefficient. This could be a key variable requiring further investigation.
+- Prot_tot: Total protein levels have consistent residuals within the confidence intervals, suggesting a stable influence across observations.
+- SexoHombre: The residuals for male gender are close to zero, with no significant outliers, indicating a stable coefficient.
+- ToxicidadSi: Toxicity shows several observations outside the confidence intervals, indicating a few influential points. These should be investigated to understand their impact.
+
+
+
+## Proportional Hazards Assumption and Model Diagnostics
+
+We continue with a detailed analysis of the proportional hazards assumption using diagnostic plots. Below, we evaluate the residuals and proportional hazards assumption for a simplified Cox model that includes Edad_dx, Progresion, and IMC.
+```{r}
+# Fit simplified Cox model
+cox_model_simplificado <- coxph(Surv(time = datos$Tiempo_Supervivencia, event = datos$SG_cens) ~ Edad_dx + Progresion + IMC, data = datos)
+summary(cox_model_simplificado)
+
+```
+
+Evaluating Proportional Hazards Assumption
+We use the cox.zph function to test the proportional hazards assumption for the simplified Cox model.
+
+```{r}
+# Evaluar la proporcionalidad de riesgos
+cox_test_ph <- cox.zph(cox_model_simplificado)
+
+print(cox_test_ph)
+```
+The global test and individual tests suggest no violation of the proportional hazards assumption (all p-values > 0.05).
+
+```{r}
+summary(cox_test_ph)
+```
+
+Proportional Hazards Diagnostic Plots
+We plot the scaled Schoenfeld residuals to visually inspect the proportional hazards assumption.
+```{r}
+par(mfrow=c(2,2))
+plot(cox_test_ph)
+
+```
+Age at Diagnosis (Edad_dx):
+The plot shows that the residuals are within the confidence limits (dashed lines) with no clear trend.
+This suggests that the proportional hazards assumption is not violated for Edad_dx.
+
+Disease Progression (Progresion):
+The plot shows some points outside the confidence limits and some variation in the trend line.
+Although there is some evidence of non-proportionality, it is not conclusive. The proportional hazards assumption for Progresion might be slightly in doubt but not definitively violated.
+
+Body Mass Index (IMC):
+The plot shows that the residuals are mostly within the confidence limits, similar to Edad_dx.
+This suggests that the proportional hazards assumption is not violated for IMC.
+
+*Conclusion:*
+The analysis of the proportional hazards assumption using both statistical tests and diagnostic plots indicates that:
+- Edad_dx and IMC: The proportional hazards assumption holds for these variables. The residuals are within the confidence limits with no clear trend, suggesting stability over time.
+- Progresion: There is slight evidence of non-proportionality, but it is not conclusive. Most residuals are within the confidence limits, and the proportionality assumption is not definitively violated.
+
+
+
+## Survival Curves from Multivariate Supervised Analysis
+We analyze the survival curves obtained from the Cox regression models to understand the overall survival probability over time and compare the fit of different models.
+
+
+X-Axis (Time): Represents the time in days.
+Y-Axis (Survival Probability): Represents the probability of survival.
+Red Curve: Represents the survival probability over time for the cohort.
+Confidence Interval (Shaded Area): Represents the 95% confidence interval for the survival probability.
+
+
+## Survival Curves and forest plot for the Simplified Cox Model
+```{r,warning=FALSE}
+ggsurvplot(survfit(cox_model_simplificado), data = datos, conf.int = TRUE, pval = TRUE)
+ggforest(cox_model_simplificado, data = datos, main = "Forest Plot Cox Simple Model")
+```
+
+Survival Trend:
+
+Similar to the full model, the survival curve for the simplified model shows a gradual decline in survival probability over time.
+The significant drops in survival probability are also observed around 100 days and 200 days.
+Confidence Intervals:
+
+The confidence intervals in the simplified model are similar to those in the full model, indicating similar levels of uncertainty in the survival estimates.
+The widening of intervals over time suggests increasing variability in survival predictions as time progresses.
+
+Forest Plot:
+
+
+Survival Curves for the Full Cox Model
+```{r,warning=FALSE}
+ggsurvplot(survfit(cox_model), data = datos, conf.int = TRUE, pval = TRUE)
+ggforest(cox_model, data = datos, main = "Forest Plot Cox Full Model")
+
+```
+
+Survival Trend:
+The survival curve shows a gradual decline in survival probability over time.
+There is a noticeable decrease in survival probability starting around 100 days and another significant drop after 200 days.
+
+Confidence Intervals:
+The confidence intervals are relatively wide, indicating variability in the survival estimates, which may be due to the small sample size.
+The intervals widen further as time progresses, reflecting increasing uncertainty in survival estimates at later time points.
+
+Both the full and simplified Cox models demonstrate similar survival trends, with consistent drops in survival probability at specific time intervals.
+The wide confidence intervals highlight the uncertainty in the survival estimates, suggesting the need for a larger sample size for more precise predictions.
+
+In the forest plots we can see the influence of the variables on patient survival, also indicating their degree of confidence with the p-value that appears to the right of each row (variable). In all cases the p-value is very high, the smallest value being that of no progression in both models. However, even in the best case the p-value is 0.281, still very high. Moreover, the hazard ratio (HR) marked with the vertical line of 1 could indicate a positive influence (lower risk of death) on the disease if the point is placed on the left, or a negative influence (exitus) if it is placed on the right of the line. On the other hand, for all cases except non-progression and age, the point is practically on the line and in these two cases, despite being to the left of HR=1, the confidence intervals are so wide given the unreliability that the positive influence of the patient's evolution that it could give rise to, we cannot really take it as reliable. 
+
+Finally, we can see the overall p-value of the models of 0.43 and 0.73 which again do not generate any confidence and the equal confidence indices of ~0.66 which do not show a good discrimination between patients who survive and those who do not for the model. Similarly the values on the AIC fit according to the akaike information criterion are high, showing a poor fit. 
+
+
+

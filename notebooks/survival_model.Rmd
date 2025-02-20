@@ -1,0 +1,1113 @@
+---
+title: "Survival"
+author: "Group7"
+date: "2024-05-13"
+output: 
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+```{r warning=FALSE}
+library(survival)
+library(KMsurv)
+library(survMisc)
+library(survminer)
+library(ggfortify)
+library(flexsurv)
+library(actuar)
+library(dplyr)
+```
+
+tutorial: https://rpubs.com/JavierMtzG/Supervivencia 
+
+# INTRODUCTION:
+
+The dataset for this survival analysis consists of structured data from 34 lung cancer patients treated with the immunotherapy drug. Below is an overview of the key variables included in the dataset, which are crucial for understanding the patient profiles and the outcomes of the treatment. These variables are instrumental in conducting a thorough survival analysis:
+
+- Edad_dx (Age at Diagnosis): This variable represents the age of the patients at the time of lung cancer diagnosis. Age is a critical factor in cancer prognosis and can influence treatment outcomes.
+
+- IMC (Body Mass Index): BMI is included to evaluate the nutritional and health status of patients, which can affect their overall survival and response to cancer therapy.
+
+- Porcentaje_perdpeso (Percentage of Weight Loss): This indicates the percentage of weight loss experienced by the patient before the treatment initiation, serving as an indicator of cancer cachexia and overall health deterioration.
+
+- Exp_tab (Smoking Exposure in Pack-Years): Given the strong association between lung cancer and tobacco use, this variable quantifies the extent of smoking in pack-years, providing insights into the risk profile of each patient.
+
+- PD_L1 (Expression Level): PD-L1 expression levels are measured to determine the likelihood of response to anti-PD-L1 therapies like Prelozumb. Higher levels are often associated with a better response to immunotherapy.
+
+**Lab Values (LDH, Prot_tot, Albumina):**
+
+- LDH (Lactate Dehydrogenase): An enzyme that, when elevated, can indicate tissue damage and has prognostic significance in cancer.
+- Prot_tot (Total Protein) and Albumina (Albumin): These markers of nutritional status and liver function are essential for assessing the patient's general health and potential complications.
+
+**Clinical Dates:**
+
+- Fecha_nac (Date of Birth) and Fecha_dx (Date of Diagnosis): These dates are fundamental for calculating the age at diagnosis and understanding the timeline of each patient's disease progression.
+- Fecha_inicio_pem (Date of Treatment Initiation): The start date of Prelozumb treatment, critical for survival analysis.
+- Fecha_SLP (Date of SLP Event) and Fecha_exitus (Date of Death or Last Follow-up): These endpoints are used to calculate survival times, crucial for the analysis of treatment effectiveness.
+
+**Censoring Indicators (SLP_cens, SG_cens):** These binary variables indicate whether the survival data for SLP (and overall survival, SG) are censored, meaning the event of interest (death or progression) has not been observed during the study period.
+
+The analysis will involve transforming these variables appropriately, calculating survival times, and applying statistical models to understand the impact of Prelozumb on patient survival. The R Markdown document will detail the methods, present the statistical findings, and discuss the implications of the results in the context of ongoing cancer research and clinical practice.
+
+```{r}
+datos <- read.csv(file = "df_supervivencia.csv", header = T)
+```
+
+To begin with the survival analysis, we first converted the date columns into Date type objects in R. This will allow us to perform time operations and calculations accurately. The dates that have been converted are Fecha_dx and Fecha_SG, corresponding to the diagnosis date and the follow-up/survival date respectively.
+
+Next, the survival time in weeks has been calculated. For this purpose, the difftime function has been used, which calculates the difference between two dates. The result has been converted to a numeric value and stored in a new column called Tiempo_Supervivencia.
+
+```{r}
+#Convert date columns to Date objects
+datos$Fecha_dx <- as.Date(datos$Fecha_dx, format = "%Y-%m-%d")
+datos$Fecha_SG <- as.Date(datos$Fecha_SG, format = "%Y-%m-%d")
+
+# Calculate survival time in days
+datos$Tiempo_Supervivencia <- as.numeric(difftime(datos$Fecha_SG, datos$Fecha_dx, units = "weeks"))
+```
+
+
+# EXPLORATORY DATA ANALYSIS:
+
+```{r}
+with(datos, prop.table(table(SG_cens)))
+```
+
+67.65% of the data is not censored, meaning that the event of interest (death or treatment interruption) occurred in these cases. 
+32.35% of the data is censored, indicating that the event of interest was not observed during the follow-up period.
+
+```{r}
+datos$Sexo <- factor(datos$Sexo, labels = c("Woman", "Man"))
+datos$Exitus <- factor(datos$Exitus, labels = c("No", "Yes"))
+datos$Hab_tabaq <- factor(datos$Hab_tabaq, labels = c("No", "Yes", "ex-smoker"))
+datos$Toxicidad <- factor(datos$Toxicidad, labels = c("No","Yes"))
+datos$Progresion <- factor(datos$Progresion, labels = c("No","Yes"))
+```
+
+```{r}
+with(datos, table(Sexo, SG_cens))
+```
+
+This suggests that there are more men in the study than women, and the proportion of censorship is similar between both sexes.
+
+```{r}
+with(datos, table(Exitus, SG_cens))
+```
+
+This indicates that the majority of patients who died are not censored, which is expected, and the majority of surviving patients are censored, indicating that the event of interest (death) did not occur for them during the follow-up.
+
+```{r}
+with(datos, table(Hab_tabaq, SG_cens))
+```
+
+This suggests that the highest proportion of censorship is among non-smokers and former smokers, which could indicate either higher survival rates or lower occurrence of the event of interest in these groups.
+
+```{r}
+with(datos, table(Toxicidad, SG_cens))
+```
+
+This suggests that toxicity is associated with higher censorship, which could indicate that patients with toxicity have a better prognosis or a lower occurrence of the event of interest.
+
+```{r}
+with(datos, table(Progresion, SG_cens))
+```
+
+This indicates that the majority of patients with disease progression are not censored, while the majority of patients without progression are censored, suggesting that disease progression is strongly associated with the occurrence of the event of interest.
+
+```{r}
+with(datos, hist(Edad_dx))
+```
+
+The histogram shows the distribution of age at diagnosis (Edad_dx) of patients in the study. Let's break down its interpretation:
+
+- X-Axis (Edad_dx):
+
+This axis represents the age in years at the time of diagnosis of the patients.
+Ages are grouped into intervals, which appear to be approximately 5 years each.
+
+- Y-Axis (Frequency):
+
+This axis indicates the number of patients (frequency) found in each age interval.
+
+- Age Distribution:
+
+There is a higher concentration of diagnosed patients in the age range between 60 and 70 years.
+The interval with the highest frequency is 65-70 years, with approximately 7 patients.
+The least common age intervals are the extremes, 45-50 years and 75-80 years, each with less than 2 patients.
+
+- Shape of the Distribution:
+
+The distribution appears to be bimodal, with two clear peaks around 55-60 years and 65-70 years.
+There is a notable drop in frequency around 50-55 years and after 75 years.
+
+```{r}
+datos$Edadg <- cut(datos$Edad_dx, c(40, 55, 70,85))
+with(datos, table(Edadg, SG_cens))
+```
+
+- Age Group (40,55]:
+
+    - 2 patients are censored (death has not occurred).
+    - 2 patients are not censored (death has occurred).
+    - The distribution is balanced between patients who have died and those who have not.
+
+- Age Group (55,70]:
+
+    - 15 patients are censored (death has not occurred).
+    - 4 patients are not censored (death has occurred).
+    - The majority of patients in this age group have not died, indicating higher survival in this age range.
+
+- Age Group (70,85]:
+
+    - 6 patients are censored (death has not occurred).
+    - 5 patients are not censored (death has occurred).
+    - The distribution is almost balanced, with a slight majority of patients whose death has not occurred.
+
+General Summary:
+
+The table suggests that:
+- Age Group (40,55): Mortality and censorship are balanced, with an equal number of deceased and non-deceased patients.
+- Age Group (55,70): The majority of patients have not died, indicating higher survival in this age group.
+- Age Group (70,85): Mortality and censorship are almost balanced, though there is a slight majority of patients whose death has not occurred.
+
+
+# NON-PARAMETRIC ESTIMATION
+
+## Exploratory Analysis
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo, datos, conf.type = "log-log") %>% ggsurvplot(title = "Survival by Gender", 
+    conf.int = T, legend.title = "Gender", legend.labs = c("Woman", "Man"))
+```
+
+- General Trends:
+
+    - The probability of survival decreases for both genders over time.
+    - Women appear to have better initial survival compared to men, but then experience a more pronounced decline.
+
+- Gender Comparison:
+
+    - The survival curve of women and men overlap at various points, suggesting that differences in survival between genders are not drastically different initially.
+    - However, after 150 days, women show a more pronounced decline in survival.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Exitus, datos, conf.type = "log-log") %>% ggsurvplot(title = "Survival by Dead", 
+    conf.int = T, legend.title = "Dead", legend.labs = c("No", "Yes"))
+```
+
+- General Trends:
+
+    - The probability of survival decreases for both groups over time.
+    - Patients who have not died (censored) maintain a higher probability of survival over time compared to patients who have died.
+
+- Comparison between Groups:
+
+    - Patients who Have Not Died:
+        - These patients show a higher probability of survival over time, with a slower decline.
+        - The confidence intervals for these patients are wider, suggesting greater variability in survival.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Hab_tabaq, datos, conf.type = "log-log") %>% ggsurvplot(title = "SSurvival by Smoker", 
+    conf.int = T, legend.title = "Smoker", legend.labs = c("No", "Si","Ex-smoker"))
+```
+
+- General Trends:
+
+    - The probability of survival decreases for all groups over time.
+    - Non-smokers exhibit greater variability in survival, as seen in the wide confidence interval.
+    - Smokers have a higher initial probability of survival, but the decline is gradual.
+    - Former smokers show a more pronounced decline after 150 days.
+
+- Comparison between Groups:
+
+    - Non-Smokers:
+        - Show a decline in probability of survival with wide variability.
+    - Smokers:
+        - Exhibit a higher initial probability of survival, but also a gradual decline over time.
+    - Former Smokers:
+        - Display a pronounced decline in probability of survival after approximately 150 days.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Toxicidad, datos, conf.type = "log-log") %>% ggsurvplot(title = "Survival by Toxicity", 
+    conf.int = T, legend.title = "Toxicity", legend.labs = c("No", "Yes"))
+```
+
+General Trends:
+
+- The probability of survival decreases for both groups over time.
+- Patients without toxicity (No) maintain a higher probability of survival over time compared to patients with toxicity (Yes).
+
+Comparison between Groups:
+
+- Patients without Toxicity:
+    - Show a higher probability of survival and a slower decline compared to patients with toxicity.
+    - Confidence intervals are wider, suggesting greater variability in survival.
+- Patients with Toxicity:
+    - Exhibit a faster decline in probability of survival, indicating a higher incidence of death in this group.
+    - The survival curve descends more steeply, reflecting a worse prognosis compared to patients without toxicity.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Progresion, datos, conf.type = "log-log") %>% ggsurvplot(title = "Survival by Progression", 
+    conf.int = T, legend.title = "Progression", legend.labs = c("No", "Yes"))
+```
+General Trends:
+
+- The probability of survival decreases for both groups over time.
+- Patients without progression (No) maintain a higher probability of survival over time compared to patients with progression (Yes).
+
+Comparison between Groups:
+
+- Patients without Progression:
+    - Show a higher probability of survival and a slower decline compared to patients with progression.
+    - Confidence intervals are wider, suggesting greater variability in survival.
+- Patients with Progression:
+    - Exhibit a faster decline in the probability of survival, indicating a higher incidence of death in this group.
+    - The survival curve descends more steeply, reflecting a worse prognosis compared to patients without progression.
+    
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Edadg, datos, conf.type = "log-log") %>% ggsurvplot(title = "Survival by Age", 
+    conf.int = T, legend.title = "Age", legend.labs = c("40-55", "55-70", "70-85"))
+```
+
+General Trends:
+
+- The probability of survival decreases for all age groups over time.
+- Individuals in the age group of 55-70 years (green line) show a higher probability of survival over time compared to the other age groups.
+
+Comparison between Age Groups:
+
+- Age Group 40-55:
+    - Shows a decline in the probability of survival with wide variability.
+- Age Group 55-70:
+    - Exhibits a higher probability of survival and a slower decline compared to the other age groups.
+- Age Group 70-85:
+    - Displays a pronounced decline in the probability of survival after approximately 100 days, indicating a higher incidence of death in this group.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo + Edadg, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Gender and Age", conf.int = T, 
+        facet.by = "Edadg", legend.title = "Gender", panel.labs = list(edadg = c("40-55", "55-70", "70-85")), short.panel.labs = T)
+```
+
+Age Group 40-55:
+
+- Men show a decline in the probability of survival with a notable drop before 200 days.
+- There is not enough information to assess the survival of women in this age group.
+
+Age Group 55-70:
+
+- Men exhibit a gradual decline in the probability of survival.
+- Women show a more pronounced decline after 200 days.
+
+Age Group 70-85:
+
+- Men display a gradual decline in the probability of survival.
+- Women show a more pronounced decline after approximately 100 days.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo + Exitus, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Gender and Dead", conf.int = T, 
+        facet.by = "Exitus", legend.title = "Gender", panel.labs = list(Exitus = c("No","Yes")), short.panel.labs = T)
+```
+
+Exitus No (Left):
+
+- Both men and women show a decrease in the probability of survival, with a more pronounced drop before 200 days.
+- Confidence intervals are wide, suggesting considerable variability in survival.
+
+Exitus Sí (Right):
+
+- Men exhibit a gradual decline in the probability of survival.
+- Women show a more pronounced decline after approximately 150 days, indicating a higher incidence of death in this group.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo + Toxicidad, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Gender and Toxicity", conf.int = T, 
+        facet.by = "Toxicidad", legend.title = "Gender", panel.labs = list(Toxicidad = c("No","Yes")), short.panel.labs = T)
+```
+
+Patients without Toxicity (Left):
+
+- Both men and women show a high probability of survival until approximately 200 days, after which men exhibit a notable decline.
+- Confidence intervals are wider for women, suggesting greater variability in survival.
+
+Patients with Toxicity (Right):
+
+- Men exhibit a more pronounced decline in the probability of survival, with several notable drops over time.
+- Women also show a decrease in the probability of survival, with a more pronounced decline after approximately 150 days, indicating a higher incidence of death in this group.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo + Hab_tabaq, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "SSurvival by Gender and Smoker", conf.int = T, 
+        facet.by = "Hab_tabaq", legend.title = "Gender", panel.labs = list(Hab_tabaq = c("No", "Yes", "Ex-smoker")), short.panel.labs = T)
+```
+
+Non-Smokers (Left):
+
+- Both men and women show a decrease in the probability of survival, with notable drops before 200 days.
+- Confidence intervals are wide, suggesting variability in survival.
+
+Current Smokers (Center):
+
+- Both men and women show a decrease in the probability of survival with notable drops around 150 days.
+- The probability of survival decreases similarly for both genders.
+
+Ex-Smokers (Right):
+
+- Men exhibit a gradual decline in the probability of survival with drops over time.
+- Women show a more pronounced decline after approximately 150 days, indicating a higher incidence of death in this group.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo + Progresion, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Gender and Progression", conf.int = T, 
+        facet.by = "Progresion", legend.title = "Gender", panel.labs = list(Progresion = c("No","Yes")), short.panel.labs = T)
+```
+
+Non-Smokers (Left):
+
+- Both men and women exhibit a decline in the probability of survival, with notable drops before 200 days.
+- Wide confidence intervals suggest variability in survival.
+
+Current Smokers (Center):
+
+- Both men and women experience a decrease in the probability of survival with notable drops around 150 days.
+- The probability of survival decreases similarly for both genders.
+
+Ex-Smokers (Right):
+
+- Men show a gradual decline in the probability of survival with drops over time.
+- Women display a more pronounced decline after approximately 150 days, indicating a higher incidence of death in this group.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Exitus + Edadg, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Dead and Age", conf.int = T, 
+        facet.by = "Edadg", legend.title = "Dead", panel.labs = list(edadg = c("40-55", "55-70", "70-85")), short.panel.labs = T)
+```
+
+Age Group (40,55):
+
+- Patients with exitus (Yes) show a decrease in the probability of survival around 200 days.
+- Patients without exitus (No) exhibit a high probability of survival over time.
+
+Age Group (55,70):
+
+- Patients with exitus (Yes) demonstrate a high probability of survival up to 200 days, after which there is a significant drop.
+- Patients without exitus (No) display a gradual decline in the probability of survival after 200 days.
+
+Age Group (70,85):
+
+- Patients with exitus (Yes) show a high probability of survival up to 100 days, after which there is a notable decrease.
+- Patients without exitus (No) exhibit a significant drop after 100 days.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Exitus + Toxicidad, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Dead and Toxicity", conf.int = T, 
+        facet.by = "Toxicidad", legend.title = "Dead", panel.labs = list(Toxicidad = c("No","Yes")), short.panel.labs = T)
+```
+
+Patients without Toxicity (Left):
+
+- The probability of survival for patients without toxicity and without exitus remains high and constant until 200 days, where a significant drop is observed.
+- Patients without toxicity and with exitus show a high probability of survival over time.
+
+Patients with Toxicity (Right):
+
+- Patients with toxicity and without exitus maintain a consistently high probability of survival.
+- Patients with toxicity and with exitus exhibit a gradual decline in the probability of survival after 100 days, with several significant drops.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Exitus + Hab_tabaq, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Dead and Smoker", conf.int = T, 
+        facet.by = "Hab_tabaq", legend.title = "Dead", panel.labs = list(Hab_tabaq = c("No", "Yes", "Ex-smoker")), short.panel.labs = T)
+```
+
+Non-Smokers (Left):
+
+- Patients without exitus (No) show a significant decline in the probability of survival after 200 days.
+- There is not enough data for patients with exitus (Yes).
+
+Smokers (Center):
+
+- Patients without exitus (No) maintain a consistently high probability of survival.
+- Patients with exitus (Yes) exhibit a significant decline in the probability of survival around 200 days.
+
+Ex-Smokers (Right):
+
+- Patients without exitus (No) show a significant decline in the probability of survival after 100 days.
+- Patients with exitus (Yes) demonstrate several significant drops in the probability of survival after 150 days.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Exitus + Progresion, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Dead and Progression", conf.int = T, 
+        facet.by = "Progresion", legend.title = "Dead", panel.labs = list(Exitus = c("No","Yes")), short.panel.labs = T)
+```
+
+Patients without Progression (Left):
+
+- Patients without exitus (No) show a significant decrease in the probability of survival after 200 days.
+- Patients with exitus (Yes) exhibit a gradual decline in the probability of survival, with several significant drops over time.
+
+Patients with Progression (Right):
+
+- Patients without exitus (No) display a high probability of survival up to 200 days, after which there is a significant decline.
+- Patients with exitus (Yes) maintain a consistently high probability of survival over time.
+
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Hab_tabaq + Edadg, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Smoker and Age", conf.int = T, 
+        facet.by = "Edadg", legend.title = "Smoker", panel.labs = list(edadg = c("40-55", "55-70", "70-85")), short.panel.labs = T)
+```
+
+Age Group (40,55):
+
+- Both non-smokers and smokers exhibit a high probability of survival up to 200 days, after which there are significant declines.
+- There is not enough data to evaluate the survival of ex-smokers in this age group.
+
+Age Group (55,70):
+
+- Non-smokers show a significant decline in the probability of survival around 200 days.
+- Smokers maintain a high probability of survival until approximately 200 days.
+- Ex-smokers exhibit several significant drops in the probability of survival around 200 days.
+
+Age Group (70,85):
+
+- Non-smokers display a significant decline in the probability of survival after approximately 100 days.
+- Smokers and ex-smokers show several significant drops in the probability of survival, with ex-smokers exhibiting drops after approximately 150 days.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Hab_tabaq + Toxicidad, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Smoker and Toxicity", conf.int = T, 
+        facet.by = "Toxicidad", legend.title = "Smoker", panel.labs = list(Toxicidad = c("No","Yes")), short.panel.labs = T)
+```
+
+Patients without Toxicity (Left):
+
+- The probability of survival remains high and constant for both non-smokers and smokers.
+- Ex-smokers exhibit a significant decline in the probability of survival around 200 days.
+
+Patients with Toxicity (Right):
+
+- Non-smokers show several significant drops in the probability of survival after 100 days.
+- Smokers display several significant drops after 150 days.
+- Ex-smokers demonstrate several significant drops around 200 days.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Hab_tabaq + Progresion, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Smoker and Porgression", conf.int = T, 
+        facet.by = "Progresion", legend.title = "Smoker", panel.labs = list(Progresion = c("No","Yes")), short.panel.labs = T)
+```
+Patients without Progression (Left):
+
+- Non-smokers show a significant decline in the probability of survival around 200 days.
+- Smokers exhibit several significant drops over time.
+- Ex-smokers display a gradual decline in the probability of survival, with several significant drops around 200 days.
+
+Patients with Progression (Right):
+
+- Both non-smokers and smokers maintain a consistently high probability of survival over time.
+- Ex-smokers maintain a consistently high probability of survival up to approximately 200 days, where a notable decline is observed.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Toxicidad + Progresion, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Toxicity and Progression", conf.int = T, 
+        facet.by = "Progresion", legend.title = "Toxicity", panel.labs = list(Progresion = c("No","Yes")), short.panel.labs = T)
+```
+
+Patients without Progression (Left):
+
+- Patients without toxicity exhibit a gradual decline in the probability of survival with several significant drops after 200 days.
+- Patients with toxicity show a more pronounced decrease in the probability of survival, with several significant drops over time.
+
+Patients with Progression (Right):
+
+- Patients without toxicity maintain a consistently high probability of survival over time.
+- Patients with toxicity maintain a consistently high probability of survival up to approximately 200 days, where a notable decline is observed.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Toxicidad + Edadg, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Toxicity and Age", conf.int = T, 
+        facet.by = "Edadg", legend.title = "Toxicity", panel.labs = list(edadg = c("40-55", "55-70", "70-85")), short.panel.labs = T)
+```
+
+Age Group (40,55):
+
+- Patients without toxicity exhibit a high probability of survival until around 200 days, where there is a significant drop.
+- Patients with toxicity show a significant decline in the probability of survival around 200 days.
+
+Age Group (55,70):
+
+- Patients without toxicity maintain a consistently high probability of survival over time.
+- Patients with toxicity demonstrate a gradual decline in the probability of survival, with several significant drops around 200 days.
+
+Age Group (70,85):
+
+- Patients without toxicity display a significant decline in the probability of survival after approximately 100 days.
+- Patients with toxicity show a gradual decline in the probability of survival, with several significant drops around 100 days.
+
+```{r}
+survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ Progresion + Edadg, datos, conf.type = "log-log") %>% 
+    ggsurvplot(title = "Survival by Progression and Age", conf.int = T, 
+        facet.by = "Edadg", legend.title = "Progression", panel.labs = list(edadg = c("40-55", "55-70", "70-85")), short.panel.labs = T)
+```
+
+Age Group (40,55):
+
+- Patients without progression (No) exhibit a high probability of survival until around 200 days, where there is a significant drop.
+- Patients with progression (Yes) show a high probability of survival until around 200 days.
+
+Age Group (55,70):
+
+- Patients without progression (No) demonstrate a gradual decline in the probability of survival with a significant drop around 200 days.
+- Patients with progression (Yes) display several significant drops in the probability of survival after 200 days.
+
+Age Group (70,85):
+
+- Patients without progression (No) display a significant decline in the probability of survival after approximately 100 days.
+- Patients with progression (Yes) show several significant drops in the probability of survival around 100 days.
+
+
+## Hypothesis
+
+1. Gender and age
+2. Gender and smoking habit
+3. Gender and progression
+4. Smoking habit and progression
+5. Toxicity and progression
+6. Age and progression
+7. Age
+8. Trends in age groups
+
+```{r}
+survdiff(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo + Edadg, datos, rho = 1)
+```
+
+Given that the p-value is 0.8, which is considerably higher than the typical threshold of 0.05, there is no statistically significant evidence to claim that there are differences in survival among the groups defined by gender and age group.
+
+```{r}
+survdiff(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo + Hab_tabaq, datos, rho = 1)
+```
+
+Given that the p-value is 1, which is considerably higher than the typical threshold of 0.05, there is no statistically significant evidence to claim that there are differences in survival among the groups defined by gender and smoking habit.
+
+```{r}
+survdiff(Surv(Tiempo_Supervivencia, SG_cens) ~ Sexo + Progresion, datos, rho = 1)
+```
+
+Given that the p-value is 0.4, which is greater than the typical threshold of 0.05, there is no statistically significant evidence to claim that there are differences in survival among the groups defined by gender and presence of disease progression.
+
+```{r}
+survdiff(Surv(Tiempo_Supervivencia, SG_cens) ~ Hab_tabaq + Progresion, datos, rho = 1)
+```
+
+Given that the p-value is 0.7, which is greater than the typical threshold of 0.05, there is no statistically significant evidence to claim that there are differences in survival among the groups defined by smoking habit and presence of disease progression.
+
+```{r}
+survdiff(Surv(Tiempo_Supervivencia, SG_cens) ~ Toxicidad + Progresion, datos, rho = 1)
+```
+
+Given that the p-value is 0.4, which is greater than the typical threshold of 0.05, there is no statistically significant evidence to claim that there are differences in survival among the groups defined by presence of toxicity and disease progression.
+
+```{r}
+survdiff(Surv(Tiempo_Supervivencia, SG_cens) ~ Edadg + Progresion, datos, rho = 1)
+```
+
+Given that the p-value is 0.3, which is greater than the typical threshold of 0.05, there is no statistically significant evidence to claim that there are differences in survival among the groups defined by age group and presence of disease progression.
+
+```{r}
+survdiff(Surv(Tiempo_Supervivencia, SG_cens) ~ Edadg, datos, rho = 1)
+```
+
+Given that the p-value is 0.1, which is greater than the typical threshold of 0.05, there is no statistically significant evidence to claim that there are differences in survival among the age groups defined.
+
+```{r}
+ten(Surv(Tiempo_Supervivencia, SG_cens) ~ Edadg, data = datos) %>% comp()
+```
+
+All conducted tests (whether standard chi-square, trend tests, or specific variants like FH_p=1_q=1) show high p-values, suggesting that there are no significant differences in survival among the different age groups.
+
+In summary, based on the results obtained and all variants of tests used, there is no statistically significant evidence to claim that survival differs among the different age groups in the study. This implies that the differences observed in survival curves could be due to chance.
+
+# PARAMETRIC MODEL
+
+## Age Group (40,55]
+
+```{r}
+datosflex <- datos %>% filter(Edadg == "(40,55]")  
+Dist <- c("weibull", "llogis", "gompertz", "lnorm")
+data.Surv <- Surv(datosflex$Tiempo_Supervivencia, datosflex$SG_cens)
+# Inicia SCRIPT#
+model <- sapply(Dist, function(x) flexsurvreg(data.Surv ~ 1, dist = x), USE.NAMES = T, 
+    simplify = F)
+
+AIC.model <- sapply(model, function(x) c(AIC = AIC(x), BIC = BIC(x), LogLik = x$loglik), 
+    simplify = T)
+
+AIC.model[, order(AIC.model["AIC", ])]
+```
+
+```{r}
+flex <- flexsurvreg(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, data = datosflex, dist = "lnorm")  
+F_est <- 1 - as.data.frame(summary(flex))[, "est"]
+KM_est <- survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, datosflex)  
+KM_est <- 1 - KM_est$surv
+
+qplot((2/pi) * asin(sqrt(KM_est)), (2/pi) * asin(sqrt(F_est))) + labs(x = "F-km-stab", 
+    y = "F-emv-stab", title = "Stabilized Probability Plot")
+```
+
+```{r}
+flexgg <- flexsurvreg(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, data = datosflex, dist = "lnorm") %>% 
+    summary(type = "survival") %>% data.frame
+
+kmgg <- survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, data = datosflex) %>% fortify
+
+
+ggplot() + geom_line(aes(time, est, col = "Parametric"), data = flexgg) + geom_step(aes(time, 
+    surv, col = "Non-Parametric"), data = kmgg) + labs(x = "Time (Days)", 
+    y = "Probability of Survival", col = "Legend", title = "Comparison of Survival Curves")
+```
+
+```{r}
+ggplot() + geom_line(aes(time, -log(est), col = "Parametric"), data = flexgg) + 
+    geom_step(aes(time, -log(surv), col = "Non-Paramétrico"), data = kmgg) + 
+    labs(x = "Time (Days)", y = "Accumulated Risk", col = "Legend", title = "Comparison of Cumulative Hazard Curves")
+```
+
+```{r}
+round(model$gompertz$res, 8)
+```
+
+#### Model Comparison
+
+1. **Model Selection**:
+   - The AIC (Akaike Information Criterion) and BIC (Bayesian Information Criterion) values for different parametric models: Log-Normal (lnorm), Weibull, Gompertz, and Log-Logistic (llogis) were compared.
+   - The Log-Normal model had the lowest AIC (24.10) and BIC (22.88) values, suggesting it as the best fit among the tested models.
+
+#### Stabilized Probability Plot
+
+2. **Stabilized Probability Plot**:
+   - This plot compares the stabilized empirical survival function (F-emv-stab) against the stabilized Kaplan-Meier estimate (F-km-stab).
+   - The points on the plot should ideally fall along a diagonal line if the model fits the data well. The provided plot suggests some deviations, indicating areas where the model and the empirical estimates differ.
+
+#### Survival and Hazard Curves
+
+3. **Comparison of Survival Curves**:
+   - The survival curves compare the parametric model (Log-Normal) against the non-parametric Kaplan-Meier estimate.
+   - The curves are quite similar, indicating that the parametric model approximates the survival function reasonably well. Minor deviations can be observed, particularly at later times.
+
+4. **Comparison of Cumulative Hazard Curves**:
+   - The cumulative hazard curves provide another way to assess model fit.
+   - Both parametric and non-parametric estimates are compared, showing similar trends with minor differences. The parametric model seems to capture the overall hazard trend but might slightly underestimate or overestimate at certain points.
+
+#### Parameter Estimates for the Gompertz Model
+
+5. **Gompertz Model Parameters**:
+   - The estimated shape parameter is approximately 0.0343 (with 95% CI: -0.0021 to 0.0707).
+   - The estimated rate parameter is approximately 0.000048 (with 95% CI: 0.00000008 to 0.0291).
+   - These values describe the Gompertz distribution's characteristics for the survival times in the age group (40,55].
+
+#### Conclusions
+
+- The Log-Normal model appears to be the best fit for the survival data of lung cancer treatment in the age group (40,55], as indicated by the lowest AIC and BIC values.
+- The comparison plots suggest that the chosen parametric models approximate the survival and hazard functions reasonably well, although some deviations exist.
+- The Gompertz model parameters provide additional insights into the survival distribution, though the Log-Normal model is preferred based on the model selection criteria.
+
+Overall, this analysis provides a comprehensive view of the survival times and model fits, aiding in understanding the treatment effects and survival probabilities for this specific age group of lung cancer patients.
+
+## Age Group (55,70]
+
+```{r}
+datosflex <- datos %>% filter(Edadg == "(55,70]") 
+Dist <- c("weibull", "llogis", "gompertz", "lnorm")
+data.Surv <- Surv(datosflex$Tiempo_Supervivencia, datosflex$SG_cens)
+# Inicia SCRIPT#
+model <- sapply(Dist, function(x) flexsurvreg(data.Surv ~ 1, dist = x), USE.NAMES = T, 
+    simplify = F)
+
+AIC.model <- sapply(model, function(x) c(AIC = AIC(x), BIC = BIC(x), LogLik = x$loglik), 
+    simplify = T)
+AIC.model[, order(AIC.model["AIC", ])]
+```
+
+```{r}
+flex <- flexsurvreg(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, data = datosflex, dist = "weibull")  
+F_est <- 1 - as.data.frame(summary(flex))[, "est"]
+KM_est <- survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, datosflex)  
+KM_est <- 1 - KM_est$surv
+
+qplot((2/pi) * asin(sqrt(KM_est)), (2/pi) * asin(sqrt(F_est))) + labs(x = "F-km-stab", 
+    y = "F-emv-stab", title = "Stabilized Probability Plot")
+```
+
+```{r}
+flexgg <- flexsurvreg(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, data = datosflex, dist = "weibull") %>% 
+    summary(type = "survival") %>% data.frame
+
+kmgg <- survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, data = datosflex) %>% fortify
+
+
+ggplot() + geom_line(aes(time, est, col = "Parametric"), data = flexgg) + geom_step(aes(time, 
+    surv, col = "Non-Parametric"), data = kmgg) + labs(x = "Time (Days)", 
+    y = "Probability of Survival", col = "Legend", title = "Comparison of Survival Curves")
+```
+
+```{r}
+ggplot() + geom_line(aes(time, -log(est), col = "Parametric"), data = flexgg) + 
+    geom_step(aes(time, -log(surv), col = "No-Parametric"), data = kmgg) + 
+    labs(x = "Time (Days)", y = "Accumulated Risk", col = "Legend", title = "Comparison of Cumulative Hazard Curves")
+```
+
+```{r}
+round(model$weibull$res, 5)
+```
+
+#### Model Comparison
+
+1. **Model Selection**:
+   - The AIC (Akaike Information Criterion) and BIC (Bayesian Information Criterion) values for different parametric models: Weibull, Gompertz, Log-Normal (lnorm), and Log-Logistic (llogis) were compared.
+   - The Weibull model had the lowest AIC (48.42) and BIC (50.31) values, suggesting it as the best fit among the tested models.
+
+#### Stabilized Probability Plot
+
+2. **Stabilized Probability Plot**:
+   - This plot compares the stabilized empirical survival function (F-emv-stab) against the stabilized Kaplan-Meier estimate (F-km-stab).
+   - The points on the plot should ideally fall along a diagonal line if the model fits the data well. The plot shows some deviations, indicating areas where the model and the empirical estimates differ, but overall, there is a reasonable fit.
+
+### Survival and Hazard Curves
+
+3. **Comparison of Survival Curves**:
+   - The survival curves compare the parametric model (Weibull) against the non-parametric Kaplan-Meier estimate.
+   - The curves are quite similar, indicating that the parametric model approximates the survival function reasonably well. Minor deviations can be observed, particularly at later times.
+
+4. **Comparison of Cumulative Hazard Curves**:
+   - The cumulative hazard curves provide another way to assess model fit.
+   - Both parametric and non-parametric estimates are compared, showing similar trends with minor differences. The parametric model seems to capture the overall hazard trend but might slightly underestimate or overestimate at certain points.
+
+### Parameter Estimates for the Weibull Model
+
+5. **Weibull Model Parameters**:
+   - The estimated shape parameter is approximately 6.4650 (with 95% CI: 3.40447 to 12.27685).
+   - The estimated scale parameter is approximately 249.1347 (with 95% CI: 214.06346 to 289.95197).
+   - These values describe the Weibull distribution's characteristics for the survival times in the age group (55,70].
+
+#### Conclusions
+
+- The Weibull model appears to be the best fit for the survival data of lung cancer treatment in the age group (55,70], as indicated by the lowest AIC and BIC values.
+- The comparison plots suggest that the chosen parametric models approximate the survival and hazard functions reasonably well, although some deviations exist.
+- The Weibull model parameters provide additional insights into the survival distribution, describing the rate and shape of the survival curve for this age group.
+
+
+## Age Group (70,85]
+
+```{r}
+datosflex <- datos %>% filter(Edadg == "(70,85]")  
+Dist <- c("weibull", "llogis", "gompertz", "lnorm")
+data.Surv <- Surv(datosflex$Tiempo_Supervivencia, datosflex$SG_cens)
+# Inicia SCRIPT#
+model <- sapply(Dist, function(x) flexsurvreg(data.Surv ~ 1, dist = x), USE.NAMES = T, 
+    simplify = F)
+
+AIC.model <- sapply(model, function(x) c(AIC = AIC(x), BIC = BIC(x), LogLik = x$loglik), 
+    simplify = T)
+
+AIC.model[, order(AIC.model["AIC", ])]
+```
+
+```{r}
+flex <- flexsurvreg(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, data = datosflex, dist = "gompertz")  
+F_est <- 1 - as.data.frame(summary(flex))[, "est"]
+KM_est <- survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, datosflex) 
+KM_est <- 1 - KM_est$surv
+
+qplot((2/pi) * asin(sqrt(KM_est)), (2/pi) * asin(sqrt(F_est))) + labs(x = "F-km-stab", 
+    y = "F-emv-stab", title = "Stabilized Probability Plot")
+```
+
+```{r}
+flexgg <- flexsurvreg(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, data = datosflex, dist = "gompertz") %>% 
+    summary(type = "survival") %>% data.frame
+
+kmgg <- survfit(Surv(Tiempo_Supervivencia, SG_cens) ~ 1, data = datosflex) %>% fortify
+
+
+ggplot() + geom_line(aes(time, est, col = "Parametric"), data = flexgg) + geom_step(aes(time, 
+    surv, col = "Non-Parametric"), data = kmgg) + labs(x = "Time (Days)", 
+    y = "Probability of Survival", col = "Legend", title = "Comparison of Survival Curves")
+```
+
+```{r}
+ggplot() + geom_line(aes(time, -log(est), col = "Parametric"), data = flexgg) + 
+    geom_step(aes(time, -log(surv), col = "Non-Parametric"), data = kmgg) + 
+    labs(x = "Time (Days)", y = "Accumulated Risk", col = "Legend", title = "Comparison of Cumulative Hazard Curves")
+```
+
+```{r}
+round(model$weibull$res, 5)
+```
+
+#### Model Comparison
+
+1. **Model Selection**:
+   - The AIC (Akaike Information Criterion) and BIC (Bayesian Information Criterion) values for different parametric models: Gompertz, Weibull, Log-Logistic (llogis), and Log-Normal (lnorm) were compared.
+   - The Gompertz model had the lowest AIC (58.25) and BIC (59.05) values, suggesting it as the best fit among the tested models.
+
+#### Stabilized Probability Plot
+
+2. **Stabilized Probability Plot**:
+   - This plot compares the stabilized empirical survival function (F-emv-stab) against the stabilized Kaplan-Meier estimate (F-km-stab).
+   - The points on the plot should ideally fall along a diagonal line if the model fits the data well. The plot shows some deviations, indicating areas where the model and the empirical estimates differ, but overall, there is a reasonable fit.
+
+#### Survival and Hazard Curves
+
+3. **Comparison of Survival Curves**:
+   - The survival curves compare the parametric model (Gompertz) against the non-parametric Kaplan-Meier estimate.
+   - The curves are quite similar, indicating that the parametric model approximates the survival function reasonably well. Minor deviations can be observed, particularly at later times.
+
+4. **Comparison of Cumulative Hazard Curves**:
+   - The cumulative hazard curves provide another way to assess model fit.
+   - Both parametric and non-parametric estimates are compared, showing similar trends with minor differences. The parametric model seems to capture the overall hazard trend but might slightly underestimate or overestimate at certain points.
+
+#### Parameter Estimates for the Weibull Model
+
+5. **Gompertz Model Parameters**:
+   - The estimated shape parameter is approximately 3.83953 (with 95% CI: 1.83575 to 8.0305).
+   - The estimated scale parameter is approximately 184.60886 (with 95% CI: 146.79058 to 232.1704).
+   - These values describe the Gompertz distribution's characteristics for the survival times in the age group (70,85].
+
+#### Conclusions
+
+- The Gompertz model appears to be the best fit for the survival data of lung cancer treatment in the age group (70,85], as indicated by the lowest AIC and BIC values.
+- The comparison plots suggest that the chosen parametric models approximate the survival and hazard functions reasonably well, although some deviations exist.
+- The Gompertz model parameters provide additional insights into the survival distribution, describing the rate and shape of the survival curve for this age group.
+
+Overall, this analysis provides a comprehensive view of the survival times and model fits, aiding in understanding the treatment effects and survival probabilities for this specific age group of lung cancer patients.
+
+# SEMI-PARAMETRIC MODEL
+
+## Variable Selection
+
+```{r}
+cox_model = coxph(Surv(Tiempo_Supervivencia, SG_cens) ~ Edadg + Sexo + Hab_tabaq + Toxicidad, datos)
+cox_model
+```
+
+Interpretation of Covariates
+
+**Age Group (55-70 years):**
+
+Coefficient: -3.10960
+HR: 0.04462
+P-value: 0.0582 (not significant at the 0.05 level, but close)
+Interpretation: Patients in the 55-70 age group have a hazard ratio of 0.04462 compared to the reference group (40-55 years), suggesting a decrease in the event risk, although this decrease is not statistically significant at the 0.05 level.
+
+**Age Group (70-85 years):**
+
+Coefficient: -1.06870
+HR: 0.34345
+P-value: 0.4697 (not significant)
+Interpretation: Patients in the 70-85 age group have a hazard ratio of 0.34345 compared to the reference group, suggesting a decrease in risk, but this is not statistically significant.
+
+**Sex (Male):**
+
+Coefficient: -1.50578
+HR: 0.22184
+P-value: 0.2641 (not significant)
+Interpretation: Males have a hazard ratio of 0.22184 compared to females, suggesting a decrease in risk, although this decrease is not statistically significant.
+
+**Smoking Habit (Yes):**
+
+Coefficient: 3.17078
+HR: 23.82602
+P-value: 0.0606 (not significant at the 0.05 level, but close)
+Interpretation: Current smokers have a hazard ratio of 23.82602 compared to non-smokers, suggesting a significant increase in event risk, although this association is not statistically significant at the 0.05 level.
+
+**Smoking Habit (Ex-smoker):**
+
+Coefficient: 1.73589
+HR: 5.67397
+P-value: 0.2202 (not significant)
+Interpretation: Ex-smokers have a hazard ratio of 5.67397 compared to non-smokers, suggesting an increase in risk, but this association is not statistically significant.
+
+**Toxicity (Yes):**
+
+Coefficient: 1.50763
+HR: 4.51603
+P-value: 0.2172 (not significant)
+Interpretation: Patients who experienced toxicity have a hazard ratio of 4.51603 compared to those who did not, suggesting an increase in risk, although this association is not statistically significant.
+
+**Likelihood Ratio Test**
+Likelihood ratio test=9.25 on 6 df, p=0.1599
+The likelihood ratio test value and its p-value (0.1599) suggest that, overall, the covariates in the model do not provide a significant improvement in predicting survival time compared to a model without covariates. This indicates that, overall, the covariates are not statistically significant.
+
+#### General Conclusion
+Although some covariates show associations with survival time (e.g., current smoking habit has a p-value close to 0.05), none of the covariates are statistically significant at the 0.05 level. Additionally, the likelihood ratio test suggests that the model as a whole is not significantly better than a null model.
+
+## Assumption Validation
+
+### Proportional Hazards
+
+```{r}
+cox.zph(cox_model)
+ggcoxzph(cox.zph(cox_model))
+```
+
+The provided graph displays the Schoenfeld residuals for each covariate in the Cox model, assessing the assumption of proportional hazards. Here's the interpretation of each panel and the general conclusion.
+
+1. **Age Group**:
+   - Graph: The black line is the smooth fit of the residuals over time, and the dashed lines represent the confidence interval.
+   - Individual Test: p = 0.5631
+   - Interpretation: There is no significant evidence of violation of the proportional hazards assumption for the Age Group variable.
+
+2. **Sex**:
+   - Graph: Similar interpretation as for Age Group.
+   - Individual Test: p = 0.2535
+   - Interpretation: There is no significant evidence of violation of the proportional hazards assumption for the Sex variable.
+
+3. **Smoking Habit**:
+   - Graph: Similar interpretation as for Age Group.
+   - Individual Test: p = 0.3473
+   - Interpretation: There is no significant evidence of violation of the proportional hazards assumption for the Smoking Habit variable.
+
+4. **Toxicity**:
+   - Graph: Similar interpretation as for Age Group.
+   - Individual Test: p = 0.114
+   - Interpretation: There is no significant evidence of violation of the proportional hazards assumption for the Toxicity variable.
+
+#### Global Test
+
+- **Global Schoenfeld Test**: p = 0.5118
+- Interpretation: There is no significant evidence of violation of the proportional hazards assumption in the overall model.
+
+#### General Conclusion
+
+1. **Proportional Hazards**:
+   - Both the individual tests and the global test of Schoenfeld residuals suggest that there is no significant evidence that the proportional hazards assumption has been violated for any of the covariates in the Cox model.
+
+2. **Graphs**:
+   - The graphs of the Schoenfeld residuals show that the trend lines (black lines) fall within the confidence intervals (dashed lines) and do not exhibit systematic patterns that would indicate a violation of the proportional hazards assumption.
+
+3. **Implications for the Model**:
+   - Since the proportional hazards assumption has not been violated, the Cox model is appropriate for these data, and estimates of the coefficients and interpretations based on the model can be trusted.
+
+In summary, the results of the Schoenfeld residuals and the tests of proportionality indicate that the fitted Cox model is suitable for the data, and there is no need for adjustments for violations of the proportional hazards assumption. This supports the validity of the model for making inferences about the covariates in the context of survival analysis.
+
+### Linearity
+
+```{r}
+ggcoxdiagnostics(cox_model, type = "martingale")
+```
+
+The provided graph displays martingale residuals (type = martingale) against the linear predictions of the Cox model. This graph is useful for assessing the goodness of fit of the model and for identifying potential issues with model specifications.
+
+#### Interpretation of the Graph
+
+1. **Axes**:
+   - **X-Axis (Linear Predictions)**: Linear predictions from the Cox model.
+   - **Y-Axis (Residuals)**: Martingale residuals, representing the difference between the observed number of events and the expected number of events under the model.
+
+2. **Points**:
+   - Each point on the graph represents an individual in the study.
+   - Martingale residuals close to 0 indicate that the observed number of events is close to the expected number.
+
+3. **Dotted Red Line**:
+   - The horizontal dotted red line at y = 0 indicates the expected value of residuals if the model fits the data well.
+
+4. **Smoothed Blue Line**:
+   - The blue line represents a smoothed fit of the residuals, showing the general trend of residuals across linear predictions.
+
+5. **Gray Shadows**:
+   - The shaded gray area represents the confidence interval around the smoothed line.
+
+#### Graph Conclusions
+
+1. **Goodness of Fit**:
+   - The smoothed blue line is relatively close to the dotted red line at y = 0, suggesting that the Cox model provides a good fit for most of the data.
+
+2. **Systematic Patterns**:
+   - The absence of a clear and systematic pattern in the residuals indicates that there are no major deviations between observed and expected values, suggesting that the model specifications are reasonable.
+
+3. **Extreme Residuals**:
+   - Although there are some points far from the red line, they are not enough to indicate a serious fitting issue. They may represent outliers or individuals with special characteristics not fully captured by the model.
+
+4. **Curvature in Smoothed Line**:
+   - The slight curvature in the smoothed blue line is not concerning as long as it remains within the confidence area and close to the reference line. However, if the curvature were more pronounced, it could indicate that a transformation of covariates or the inclusion of nonlinear terms could improve the model.
+
+#### General Conclusion
+
+The martingale residuals graph shows that the Cox model fits the data well, with no significant evidence of lack of fit. The residuals are distributed around the expected line (y = 0), and no systematic patterns suggesting serious issues with model specifications are observed.
+
+### Residuals
+
+```{r}
+ggcoxdiagnostics(cox_model, type = "dfbeta")
+```
+
+The provided graphs show DFBETA residuals for each covariate in the Cox model. DFBETA residuals are useful for assessing the influence of each observation on the estimation of model coefficients.
+
+#### Interpretation of DFBETA Residuals Graphs
+
+1. **Axes**:
+   - **X-Axis (Observation ID)**: Identification of observations in the dataset.
+   - **Y-Axis (Residuals)**: DFBETA residuals for each observation.
+
+2. **Points**:
+   - Each point on the graph represents the impact of a specific observation on the coefficient of the corresponding covariate.
+
+3. **Dotted Red Line**:
+   - The horizontal dotted red line at y = 0 indicates that an observation has no impact on the coefficient estimation.
+
+4. **Smoothed Blue Line**:
+   - The blue line represents a smoothed fit of the residuals, showing the general trend of residuals across observations.
+
+5. **Gray Shadows**:
+   - The shaded gray area represents the confidence interval around the smoothed line.
+
+#### Graph Conclusions
+
+1. **Edadg(55-70)**:
+   - Residuals are centered around 0, with some extreme observations.
+   - The smoothed line is relatively close to the dotted red line, indicating that most observations have limited impact on the coefficient.
+
+2. **Edadg(70-85)**:
+   - Residuals are centered around 0, with some extreme observations.
+   - The smoothed line is relatively close to the dotted red line, indicating limited impact of most observations.
+
+3. **SmokerEx_smoker**:
+   - Residuals are centered around 0, with some extreme observations.
+   - The smoothed line is close to the dotted red line, indicating limited impact of most observations.
+
+4. **SmokerYes**:
+   - Residuals are centered around 0, with some extreme observations.
+   - The smoothed line is close to the dotted red line, indicating limited impact of most observations.
+
+5. **GenderMen**:
+   - Residuals are centered around 0, with some extreme observations.
+   - The smoothed line is close to the dotted red line, indicating limited impact of most observations.
+
+6. **ToxicityYes**:
+   - Residuals are centered around 0, with some extreme observations.
+   - The smoothed line is close to the dotted red line, indicating limited impact of most observations.
+
+#### General Conclusion
+
+1. **Influence of Observations**:
+   - Most observations have limited impact on the model coefficient estimations, as DFBETA residuals are centered around 0 and the smoothed line is close to the reference line.
+   - There are some extreme observations that could be influencing the estimations, but they do not seem to be sufficient to invalidate the model.
+
+2. **Model Stability**:
+   - The graphs suggest that the model is stable and robust, as most observations do not have a disproportionate impact on the coefficients.
+
+3. **Further Investigation**:
+   - Observations with extreme residuals could be further investigated to understand if they represent data errors, special characteristics of certain individuals, or if there is any underlying reason for their impact.
+
+In summary, the DFBETA residuals graphs indicate that the Cox model is reasonably stable, and most observations do not have a disproportionate impact on coefficient estimations. Extreme observations should be investigated further but do not seem to invalidate the overall stability of the model.

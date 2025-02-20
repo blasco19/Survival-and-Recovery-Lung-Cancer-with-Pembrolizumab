@@ -1,0 +1,539 @@
+---
+title: "PLS"
+author: "G7"
+date: "2024-05-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(ropls)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(pls)
+library(tibble) 
+library(caret)
+library(randomForest)
+library(ranger)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# VARIABLE SELECTION
+```{r}
+df <- read_excel("df_definitivo-2.xlsx", sheet = "Copia de datos")
+rownames(df) = df$id
+df$Afectacion_ganglionar = as.numeric(df$Afectacion_ganglionar)
+df$Afectacion_metastasica = as.numeric(df$Afectacion_metastasica)
+df$Tamaño_tumor = as.numeric(df$Tamaño_tumor)
+df$Grado_tox = as.numeric(df$Grado_tox)
+df$SII_pre = log(df$SII_pre)
+df$SII_1C = log(df$SII_1C)
+df$SII_2C = log(df$SII_2C)
+df$SII_1eval = log(df$SII_1eval)
+
+variables_inutiles = c("Anciano", "Peso", "Talla", "SG", "SG_cens", "SLP", "SLP_cens", "Tipo_tox", "NLR2C_corte4o5")
+df2 = select(df, -all_of(variables_inutiles))
+```
+
+## PLS
+
+# SPECIFIC VARIABLES FIRST EVAL
+
+```{r}
+#colnames(df2)
+X1.1 = df2[,2:49]
+X1.2 = df2[,61:67]
+X = bind_cols(X1.1, X1.2)
+Y = as.matrix(df2['pri_eval_num_ok'])
+
+```
+
+# SPECIFIC VARIABLES BEST RESPONSE
+
+```{r}
+
+#colnames(df2)
+X2 = df2[,2:67]
+Y2 = as.matrix(df2["mejor_resp_num_ok"])
+
+```
+
+# SCALING
+
+```{r}
+mypls = opls(x = X, y = Y, predI = NA, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+# NUMBER OF COMPONENTS SELECTION
+
+```{r}
+mypls_2 = opls(x = X, y = Y, predI = 33, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+
+```{r}
+
+plot(1:33, mypls_2@modelDF$`R2Y(cum)`, type = "o", pch = 16, col = "blue3",
+     lwd = 2, xlab = "Components", ylab = "",
+     main = "PLS model for predicting First Evaluation", ylim = c(-1,1))
+lines(1:33, mypls_2@modelDF$`Q2(cum)`, type = "o", pch = 16, col = "red3",
+      lwd = 2)
+abline(h = 0, col = "red3", lty = 2)
+legend("bottomleft", c("R2Y", "Q2"), lwd = 2, 
+       col = c("blue3", "red3"), bty = "n")
+
+```
+
+```{r}
+mypls = opls(x = X, y = Y, predI = 2, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+# EXTREME INDIVIDUALS STUDY 
+
+To study the anomalous data we will use Hotelling's T2 and the Residual Sum of Squares. 
+
+In the PCA we observed that individual 11 is an extreme outlier. But we will still represent it in the Hotelling T2 plot. 
+
+```{r}
+misScores = mypls@scoreMN
+varT = apply(misScores, 2, var)
+miT2 = colSums(t(misScores**2) / varT)
+N = nrow(X)
+A = 2
+F95 = A*(N**2 - 1)/(N*(N - A)) * qf(0.95, A, N-A); F95
+F99 = A*(N**2 - 1)/(N*(N - A)) * qf(0.99, A, N-A); F99
+plot(1:length(miT2), miT2, type = "l", xlab = "pacientes", ylab = "T2",
+     main = "PLS: T2-Hotelling", ylim = c(0,15))
+abline(h = F95, col = "orange", lty = 2, lwd = 2)
+abline(h = F99, col = "red3", lty = 2, lwd = 2)
+```
+
+```{r}
+myT = mypls@scoreMN
+myP = mypls@loadingMN
+myE = scale(X) - myT%*%t(myP) 
+mySCR = rowSums(myE^2)   # SPE 
+plot(1:length(mySCR), mySCR, type = "l", main = "PLS: SCR Distance to the model", 
+     ylab = "SCR", xlab = "pacientes", ylim = c(0,100))
+g = var(mySCR)/(2*mean(mySCR))
+h = (2*mean(mySCR)^2)/var(mySCR)
+chi2lim = g*qchisq(0.95, df = h)
+abline(h = chi2lim, col = "orange", lty = 2)
+chi2lim99 = g*qchisq(0.99, df = h)
+abline(h = chi2lim99, col = "red3", lty = 2)
+```
+
+# GRPAHICS
+
+```{r}
+plot(x = mypls, typeVc = "x-score", parCompVi = c(1, 2), parLabVc = rownames(X), parPaletteVc = NA, parTitleL = TRUE, parCexMetricN = NA)
+```
+
+
+```{r}
+plot(x = mypls, typeVc = "x-loading",
+     parCexN = 0.8, parCompVi = c(1, 2), parPaletteVc = NA,
+     parTitleL = TRUE, parCexMetricN = NA)
+```
+
+
+```{r}
+plot(x = mypls, typeVc = "xy-weight",
+     parCexN = 0.5, parCompVi = c(1, 2), parPaletteVc = NA, 
+     parTitleL = TRUE, parCexMetricN = NA)
+```
+
+```{r}
+
+VIP = data.frame(sort(mypls@vipVn))
+bottom_10 <- data.frame(variables = rownames(VIP)[1:10], vip = VIP[1:10, ])
+top_10 <- data.frame(variables = rownames(VIP)[46:55], vip = VIP[46:55, ])
+
+grafico_barras <- ggplot(top_10, aes(x = reorder(variables, vip), y = vip)) + geom_bar(stat = "identity", fill = "skyblue") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  labs(x = "Variable", y = "VIP", title = "Top 10 VIP variables")
+
+grafico_barras2 <- ggplot(bottom_10, aes(x = reorder(variables, vip), y = vip)) + geom_bar(stat = "identity", fill = "skyblue") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  labs(x = "Variable", y = "VIP", title = "Bottom 10 VIP variables")
+
+print(grafico_barras)
+print(grafico_barras2)
+
+
+```
+
+# EVALUATION METRICS FOR REGRESSION
+
+```{r}
+Ypred = predict(mypls)
+residuos = Y-Ypred
+myRMSE = sqrt(colMeans(residuos^2))
+CVrmse = myRMSE/colMeans(Y)
+myRMSE 
+CVrmse
+```
+
+```{r}
+for (i in 1:ncol(Y)) {
+  plot(Y[,i], Ypred[,i], asp = 1, main = colnames(Y)[i],
+     xlab = "observado", ylab = "predicho")
+abline(a=0, b=1, col = "red3", lwd = 2, lty = 2)
+}
+```
+
+# SCALING
+
+```{r}
+mypls2 = opls(x = X2, y = Y2, predI = NA, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+```{r}
+mypls_2.2 = opls(x = X2, y = Y2, predI = 33, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+# NUMBER OF COMPONENTS SELECTION
+
+```{r}
+plot(1:33, mypls_2.2@modelDF$`R2Y(cum)`, type = "o", pch = 16, col = "blue3",
+     lwd = 2, xlab = "Components", ylab = "",
+     main = "PLS model for predicting Best Response", ylim = c(-1,1))
+lines(1:33, mypls_2.2@modelDF$`Q2(cum)`, type = "o", pch = 16, col = "red3",
+      lwd = 2)
+abline(h = 0, col = "red3", lty = 2)
+legend("bottomleft", c("R2Y", "Q2"), lwd = 2, 
+       col = c("blue3", "red3"), bty = "n")
+```
+
+```{r}
+mypls_2 = opls(x = X2, y = Y2, predI = 4, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+# EXTREME INDIVIDUALS STUDY
+
+To study the anomalous data we will use Hotelling's T2 and the Residual Sum of Squares. 
+
+In the PCA we observed that individual 11 is an extreme outlier. But we will still represent it in the Hotelling T2 plot. 
+```{r}
+misScores = mypls_2@scoreMN
+varT = apply(misScores, 2, var)
+miT2 = colSums(t(misScores**2) / varT)
+N = nrow(X2)
+A = 2
+F95 = A*(N**2 - 1)/(N*(N - A)) * qf(0.95, A, N-A); F95
+F99 = A*(N**2 - 1)/(N*(N - A)) * qf(0.99, A, N-A); F99
+plot(1:length(miT2), miT2, type = "l", xlab = "pacientes", ylab = "T2",
+     main = "PLS: T2-Hotelling", ylim = c(0,15))
+abline(h = F95, col = "orange", lty = 2, lwd = 2)
+abline(h = F99, col = "red3", lty = 2, lwd = 2)
+```
+
+Individual 11 continues to come out as extreme data, even when performing logarithmic transformations. 
+
+```{r}
+myT = mypls_2@scoreMN
+myP = mypls_2@loadingMN
+myE = scale(X2) - myT%*%t(myP) 
+mySCR = rowSums(myE^2)   # SPE 
+plot(1:length(mySCR), mySCR, type = "l", main = "PLS: SCR Distance to the model", 
+     ylab = "SCR", xlab = "pacientes", ylim = c(0,100))
+g = var(mySCR)/(2*mean(mySCR))
+h = (2*mean(mySCR)^2)/var(mySCR)
+chi2lim = g*qchisq(0.95, df = h)
+abline(h = chi2lim, col = "orange", lty = 2)
+chi2lim99 = g*qchisq(0.99, df = h)
+abline(h = chi2lim99, col = "red3", lty = 2)
+```
+
+# GRAPHICS
+
+
+```{r}
+plot(x = mypls_2, typeVc = "x-score", parCompVi = c(1, 2), parLabVc = rownames(X), parPaletteVc = NA, parTitleL = TRUE, parCexMetricN = NA)
+```
+
+```{r}
+plot(x = mypls_2, typeVc = "x-score", parCompVi = c(3, 4), parLabVc = rownames(X), parPaletteVc = NA, parTitleL = TRUE, parCexMetricN = NA)
+```
+
+```{r}
+plot(x = mypls_2, typeVc = "x-score", parCompVi = c(1,3), parLabVc = rownames(X), parPaletteVc = NA, parTitleL = TRUE, parCexMetricN = NA)
+```
+
+```{r}
+plot(x = mypls_2, typeVc = "x-score", parCompVi = c(1, 4), parLabVc = rownames(X), parPaletteVc = NA, parTitleL = TRUE, parCexMetricN = NA)
+```
+
+
+```{r}
+plot(x = mypls_2, typeVc = "x-loading",
+     parCexN = 0.8, parCompVi = c(1, 2), parPaletteVc = NA,
+     parTitleL = TRUE, parCexMetricN = NA)
+```
+
+```{r}
+plot(x = mypls_2, typeVc = "xy-weight",
+     parCexN = 0.5, parCompVi = c(1, 2), parPaletteVc = NA, 
+     parTitleL = TRUE, parCexMetricN = NA)
+```
+
+```{r}
+plot(x = mypls_2, typeVc = "xy-weight",
+     parCexN = 0.5, parCompVi = c(3, 4), parPaletteVc = NA, 
+     parTitleL = TRUE, parCexMetricN = NA)
+```
+
+
+```{r}
+VIP2 = data.frame(sort(mypls_2@vipVn))
+bottom_10 <- data.frame(variables = rownames(VIP2)[1:10], vip = VIP[1:10, ])
+top_10 <- data.frame(variables = rownames(VIP2)[46:55], vip = VIP[46:55, ])
+
+grafico_barras <- ggplot(top_10, aes(x = reorder(variables, vip), y = vip)) + geom_bar(stat = "identity", fill = "skyblue") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  labs(x = "Variable", y = "VIP", title = "Top 10 VIP variables")
+
+grafico_barras2 <- ggplot(bottom_10, aes(x = reorder(variables, vip), y = vip)) + geom_bar(stat = "identity", fill = "skyblue") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  labs(x = "Variable", y = "VIP", title = "Bottom 10 VIP variables")
+
+print(grafico_barras)
+print(grafico_barras2)
+```
+# EVALUATION METRICS FOR REGRESSION
+
+```{r}
+Ypred2 = predict(mypls_2)
+residuos2 = Y2-Ypred2
+myRMSE2 = sqrt(colMeans(residuos2^2))
+CVrmse2 = myRMSE2/colMeans(Y2)
+myRMSE2 
+CVrmse2
+```
+The RMSE expresses the difference between the values predicted by our model and the observed values. That is, on average the value differs +/- 0.2638 from the actual value. It is normal because the values observed are integers (1, 2 and 3) and the values predicted are real numbers between 1 and 3. 
+
+The CVrmse we obtain is 0.195 which means that the model predictions have an error of 19.5% in relation to the scale of the original data. With this value we could say that the model has a moderate-acceptable performance.
+
+```{r}
+for (i in 1:ncol(Y)) {
+  plot(Y2[,i], Ypred2[,i], asp = 1, main = colnames(Y2)[i],
+     xlab = "observado", ylab = "predicho")
+abline(a=0, b=1, col = "red3", lwd = 2, lty = 2)
+}
+```
+
+## PLS-DA
+
+# SPECIFIC VARIABLES FIRST EVAL
+
+```{r}
+
+X1.1 = df2[,2:49]
+X1.2 = df2[,61:67]
+X = bind_cols(X1.1, X1.2)
+Y = df2$pri_eval_num_ok
+Y = as.matrix(as.factor(Y))
+
+```
+
+# SPECIFIC VARIABLES BEST RESPONSE
+
+```{r}
+X2 = df2[,2:67]
+Y2 = df2$mejor_resp_num_ok
+Y2 = as.matrix(as.factor(Y2))
+```
+
+# SCALING
+
+```{r}
+myplsda = opls(x = X, y = Y, predI = 33, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+# NUMBER OF COMPONENTS SELECTION
+
+```{r}
+plot(1:33, myplsda@modelDF$`R2Y(cum)`, type = "o", pch = 16, col = "blue3",
+     lwd = 2, xlab = "Components", ylab = "", ylim = c(-0.5, 1),
+     main = "PLS-DA model for predicting First Evaluation")
+lines(1:33, myplsda@modelDF$`Q2(cum)`, type = "o", pch = 16, col = "red3",
+      lwd = 2)
+abline(h = 0, col = "red3", lty = 2)
+legend("bottomleft", c("R2Y", "Q2"), lwd = 2, 
+       col = c("blue3", "red3"), bty = "n")
+```
+
+```{r}
+myplsda = opls(x = X, y = Y, predI = 2, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+# EXTREME INDIVIDUALS STUDY
+
+```{r}
+misScores = myplsda@scoreMN
+varT = apply(misScores, 2, var)
+miT2 = colSums(t(misScores**2) / varT)
+N = nrow(X)
+A = 3
+F95 = A*(N**2 - 1)/(N*(N - A)) * qf(0.95, A, N-A);
+F99 = A*(N**2 - 1)/(N*(N - A)) * qf(0.99, A, N-A);
+
+plot(1:length(miT2), miT2, type = "l", xlab = "Patients", ylab = "T2",
+     main = "PLS: T2-Hotelling")
+abline(h = F95, col = "orange", lty = 2, lwd = 2)
+abline(h = F99, col = "red3", lty = 2, lwd = 2)
+```
+
+```{r}
+myT = myplsda@scoreMN
+myP = myplsda@loadingMN
+myE = scale(X) - myT%*%t(myP) 
+mySCR = rowSums(myE^2)   # SPE 
+plot(1:length(mySCR), mySCR, type = "l", main = "SCR", 
+     xlab = "Patients")
+
+g = var(mySCR)/(2*mean(mySCR))
+h = (2*mean(mySCR)^2)/var(mySCR)
+chi2lim = g*qchisq(0.95, df = h)
+abline(h = chi2lim, col = "orange", lty = 2)
+chi2lim99 = g*qchisq(0.99, df = h)
+abline(h = chi2lim99, col = "red3", lty = 2)
+```
+ 
+# GRAPHICS
+
+```{r}
+plot(x = myplsda, typeVc = "x-score",
+     parCexN = 0.5, parCompVi = c(1, 2), parPaletteVc = NA,
+     parTitleL = TRUE, parCexMetricN = NA)
+```
+
+
+```{r}
+plot(x = myplsda, typeVc = "xy-weight",
+     parCexN = 0.5, parCompVi = c(1, 2), parPaletteVc = NA, 
+     parTitleL = TRUE, parCexMetricN = NA)
+```
+
+```{r}
+VIP = data.frame(sort(myplsda@vipVn))
+bottom_10 <- data.frame(variables = rownames(VIP)[1:10], vip = VIP[1:10, ])
+top_10 <- data.frame(variables = rownames(VIP)[46:55], vip = VIP[46:55, ])
+
+grafico_barras <- ggplot(top_10, aes(x = reorder(variables, vip), y = vip)) + geom_bar(stat = "identity", fill = "skyblue") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  labs(x = "Variable", y = "VIP", title = "Top 10 VIP variables")
+
+grafico_barras2 <- ggplot(bottom_10, aes(x = reorder(variables, vip), y = vip)) + geom_bar(stat = "identity", fill = "skyblue") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  labs(x = "Variable", y = "VIP", title = "Bottom 10 VIP variables")
+
+print(grafico_barras)
+print(grafico_barras2)
+```
+
+
+# EVALUATION METRICS FOR CLASSIFICATION
+
+```{r}
+myplsda_pred = predict(myplsda)
+actual = factor(df2$pri_eval_num_ok)
+myplsda_pred <- factor(myplsda_pred, levels = levels(actual))
+confusionMatrix(myplsda_pred, actual, positive = "3")
+```
+
+We chose class 3 as the positive one because we believe that it is more important to detect patients who are having disease progression than those whose disease is progressing or at least stable. We can see that the model does find those who are getting worse (class 3). 
+
+The kappa index tells us that the predictions are close to being made by chance. We could say that this is due to class 2 especially where we find patients with a slight pseudo-progression and stable disease, i.e. they are between class 1 and 3 three totally. 
+
+However, if we look at the value of balanced accuracy it suggests to us that the model is not making such bad predictions and that at least if we focus on predicting those who are class 3 it is doing it correctly. 
+
+From this model we can conclude that perhaps the proposed classes should be redefined as there could be more or less classes that would help us to better separate patients with this PLS. 
+
+# SCALING
+
+```{r}
+myplsda2 = opls(x = X2, y = Y2, predI = NA, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+# NUMBER OF COMPONENTS SELECTION
+
+```{r}
+myplsda2 = opls(x = X2, y = Y2, predI = 33, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+
+```{r}
+plot(1:33, myplsda2@modelDF$`R2Y(cum)`, type = "o", pch = 16, col = "blue3", lwd = 2, xlab = "Components", ylab = "", main = "PLS-DA model for predicting Best Response", , ylim = c(-0.5, 1))
+
+lines(1:33, myplsda2@modelDF$`Q2(cum)`, type = "o", pch = 16, col = "red3", lwd = 2)
+abline(h = 0, col = "red3", lty = 2)
+legend("bottomleft", c("R2Y", "Q2"), lwd = 2, 
+       col = c("blue3", "red3"), bty = "n")
+```
+```{r}
+myplsda2 = opls(x = X2, y = Y2, predI = 2, crossvalI = nrow(X), scaleC = "standard", fig.pdfC = "none")
+```
+
+
+# EXTREME INDIVIDUALS STUDY
+
+```{r}
+misScores = myplsda2@scoreMN
+varT = apply(misScores, 2, var)
+miT2 = colSums(t(misScores**2) / varT)
+N = nrow(X2)
+A = 4
+F95 = A*(N**2 - 1)/(N*(N - A)) * qf(0.95, A, N-A);
+F99 = A*(N**2 - 1)/(N*(N - A)) * qf(0.99, A, N-A);
+
+plot(1:length(miT2), miT2, type = "l", xlab = "Patients", ylab = "T2",
+     main = "PLS: T2-Hotelling",ylim=c(0,20))
+abline(h = F95, col = "orange", lty = 2, lwd = 2)
+abline(h = F99, col = "red3", lty = 2, lwd = 2)
+```
+
+
+```{r}
+myT = myplsda2@scoreMN
+myP = myplsda2@loadingMN
+myE = scale(X2) - myT%*%t(myP) 
+mySCR = rowSums(myE^2)   # SPE 
+plot(1:length(mySCR), mySCR, type = "l", main = "SCR", 
+     xlab = "Patients")
+
+g = var(mySCR)/(2*mean(mySCR))
+h = (2*mean(mySCR)^2)/var(mySCR)
+chi2lim = g*qchisq(0.95, df = h)
+abline(h = chi2lim, col = "orange", lty = 2)
+chi2lim99 = g*qchisq(0.99, df = h)
+abline(h = chi2lim99, col = "red3", lty = 2)
+```
+
+# GRAPHICS
+
+```{r}
+plot(x = myplsda2, typeVc = "x-score",
+     parCexN = 0.8, parCompVi = c(1, 2), parPaletteVc = NA,
+     parTitleL = TRUE, parCexMetricN = NA)
+```
+
+```{r}
+plot(x = myplsda2, typeVc = "xy-weight",
+     parCexN = 0.7, parCompVi = c(1, 2), parPaletteVc = NA, 
+     parTitleL = TRUE, parCexMetricN = NA)
+```
+
+```{r}
+VIP = data.frame(sort(myplsda2@vipVn))
+bottom_10 <- data.frame(variables = rownames(VIP)[1:10], vip = VIP[1:10, ])
+top_10 <- data.frame(variables = rownames(VIP)[46:55], vip = VIP[46:55, ])
+
+grafico_barras <- ggplot(top_10, aes(x = reorder(variables, vip), y = vip)) + geom_bar(stat = "identity", fill = "skyblue") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  labs(x = "Variable", y = "VIP", title = "Top 10 VIP variables")
+
+grafico_barras2 <- ggplot(bottom_10, aes(x = reorder(variables, vip), y = vip)) + geom_bar(stat = "identity", fill = "skyblue") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  labs(x = "Variable", y = "VIP", title = "Bottom 10 VIP variables")
+
+print(grafico_barras)
+print(grafico_barras2)
+```
+
+
+# EVALUATION METRICS FOR CLASSIFICATION
+
+```{r}
+mypred2 = predict(myplsda2)
+actual = factor(df2$mejor_resp_num_ok)
+mypred2 <- factor(mypred2, levels = levels(actual))
+confusionMatrix(mypred2, actual, positive = "3")
+```
+

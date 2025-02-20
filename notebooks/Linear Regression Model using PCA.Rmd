@@ -1,0 +1,174 @@
+---
+title: "Multiple Linear Regression Model using PCA"
+author: "Group 7"
+date: "2024-04-25"
+output: html_document
+---
+
+
+### INTRODUCTION 
+This annex details the process of building and evaluating a multiple linear prediction model using latent variables obtained through Principal Component Analysis (PCA) as predictor variables. PCA is a widely used technique in data analysis to reduce dimensionality and handle multicollinearity among predictor variables. By extracting the principal components that capture most of the variability in the original data, PCA allows us to summarise information from multiple variables into a smaller set of uncorrelated variables, called principal components.
+
+This strategy is especially useful when working with high dimensionality data sets or with a high degree of multicollinearity between predictor variables. This could be verified by visualising the variables in the PCA of the exploratory analysis
+
+The process detailed in this annex will range from preparing the data and conducting the PCA to building and evaluating the multiple linear prediction model. The steps necessary to carry out each stage of the analysis will be described, including the selection of principal components, the construction of the linear model, the assessment of the quality of fit and the interpretation of the results.
+
+
+```{r,echo=FALSE, warning=FALSE,error=FALSE,include=FALSE}
+library(dplyr)
+library(FactoMineR)
+library(knitr)
+library(factoextra)
+```
+
+### PREPROCESSING 
+Before conducting the PCA, it is important to prepare the data properly. Therefore, redundant pvariables are eliminated, we already have prior handling of missing values, and in the process variables are standardised if they have different scales. In addition, when using the output of this process for a predictive model, the variable to be predicted must be excluded from the data set so that it is not included in the PCA analysis.
+
+```{r}
+df <- read.csv("C:/Users/josem/OneDrive/Carrera/3º/2º Cuatri/PROYECTO III/df_definitivo.csv",sep=";")
+df_pca <- df[, !colnames(df) %in% c("primera_eval","primera_eval_num")]
+
+descDatos = data.frame("variable" = colnames(df_pca),
+                       "tipo"=c("categorical","numerical","categorical",rep("numerical",5),rep("categorical",5),rep("numerical",34), "categorical",rep("numerical",3)))
+rownames(descDatos) = descDatos$variable
+columnas_numericas <- descDatos$variable[descDatos$tipo == "numerical"]
+df_pca <- df_pca %>% 
+  mutate(across(all_of(columnas_numericas), ~as.numeric(gsub(",", ".", .))))
+
+```
+
+Notice the identification of the categorical variables, for the correct development of the PCA. In our case, these variables are already dummy and therefore do not require any further pre-processing other than their identification and indication in the model.
+
+### PCA AND COMPONENT SELECTION
+
+Finally, once all the preprocessing is done, we can proceed to the PCA analysis. We calculate the principal components that will capture much of the variability of the data while not allowing us to reduce the dimensionality of the set. 
+
+```{r}
+res.pca = PCA(df_pca, scale.unit = TRUE, graph = FALSE, ncp = 10, 
+              quali.sup = which(descDatos$tipo == "categorical"))
+```
+
+
+For the selection of the optimal number of components, we will base ourselves on the criterion that these components exceed the average explained variance, i.e. that in the graph the bars exceed the red line that marks this value. In addition, we will take into account that these components should explain a good amount of information, and at the same time that the number of components should not be too high or too small, as it is focused on a multiple linear regression model. 
+
+
+```{r}
+eig.val <- res.pca$eig
+
+
+VPmedio = 100 * (1/nrow(res.pca$eig))
+
+fviz_eig(res.pca, addlabels = TRUE) +
+    geom_hline(yintercept=VPmedio, linetype=2, color="red")
+
+```
+
+Therefore, we finally selected 6 components that will explain about 60% of the variability of the model.
+
+```{r}
+kable(eig.val[1:6,])
+```
+
+### VERIFICATION OF ANOMALOUS OBSERVATIONS
+
+Next, we will carry out the process of observing anomalous cases using Hotelling's **T^2**.
+
+Hotelling's **T^2** is a statistical measure used to detect anomalous or outlier cases in a multivariate data set. Using it we can create two confidence intervals of 95 and 99% to see the severity of these deviations.  
+
+```{r}
+K = 6
+res.pca = PCA(df_pca, scale.unit = TRUE, graph = FALSE, ncp = K,
+              quali.sup = which(descDatos$tipo == "categorical"))
+misScores = res.pca$ind$coord[,1:K]
+miT2 = colSums(t(misScores**2) / eig.val[1:K,1])
+I = nrow(df)
+F95 = K*(I**2 - 1)/(I*(I - K)) * qf(0.95, K, I-K)
+F99 = K*(I**2 - 1)/(I*(I - K)) * qf(0.99, K, I-K)
+plot(1:length(miT2), miT2, type = "l", xlab = "datos", ylab = "T2")
+abline(h = F95, col = "orange", lty = 2, lwd = 2)
+abline(h = F99, col = "red3", lty = 2, lwd = 2)
+```
+
+As can be seen, only one observation exceeds the first margin of anomie according to Hotelling's **T^2**. Due to the fact that this margin is not very large, does not reach the next measure and the fact that we have very few observations, we will not treat this value. In this way we will keep more explained variability of the data.  
+
+In addition to looking at this statistic, for the detection of outliers and values far from the model we will look at the distance to the model through the residual sum of squares. From the following graphs, very similar to the previous one, we will again decide whether to take any action with our data. 
+
+```{r,echo=FALSE,warning=FALSE,error=FALSE,include=FALSE}
+contribT2 = function (X, scores, loadings, eigenval, observ, cutoff = 2) {
+  # X is data matrix and must be centered (or centered and scaled if data were scaled)
+  misScoresNorm = t(t(scores**2) / eigenval)
+  misContrib = NULL
+  for (oo in observ) {
+    print(rownames(misScores)[oo])
+    print(misScores[oo,])
+    misPCs = which(as.numeric(misScoresNorm[oo,]) > cutoff)
+    lacontri = sapply(misPCs, function (cc) (misScores[oo,cc]/eigenval[cc])*loadings[,cc]*X[oo,])
+    lacontri = rowSums((1*(sign(lacontri) == 1))*lacontri)
+    misContrib = cbind(misContrib, lacontri)
+  }
+  colnames(misContrib) = rownames(misScoresNorm[observ,])
+  return(misContrib)
+}
+
+# Recuperamos los datos utilizados en el modelo PCA, centrados y escalados
+datosCE = df_pca[,descDatos$tipo == "numerical"]
+datosCE = datosCE[,setdiff(colnames(datosCE), c("rating", "weight", "cups"))]
+datosCE = scale(datosCE, center = TRUE, scale = TRUE)
+X = as.matrix(datosCE)
+# Calculamos los loadings a partir de las coordenadas de las variables
+# ya que la librería FactoMineR nos devuelve los loadings ponderados 
+# por la importancia de cada componente principal.
+misLoadings = sweep(res.pca$var$coord, 2, sqrt(res.pca$eig[1:K,1]), FUN="/")
+# Calculamos las contribuciones
+mycontrisT2 = contribT2(X = X, scores = misScores, loadings = misLoadings, 
+                        eigenval = eig.val[1:K,1], observ = which.max(miT2),
+                        cutoff = 2)
+```
+
+```{r}
+myE = X - misScores %*% t(misLoadings) 
+mySCR = rowSums(myE^2)  
+plot(1:length(mySCR), mySCR, type = "l", main = "Distancia al modelo", 
+     ylab = "SCR", xlab = "Datos" )
+g = var(mySCR)/(2*mean(mySCR))
+h = (2*mean(mySCR)^2)/var(mySCR)
+chi2lim = g*qchisq(0.95, df = h)
+chi2lim99 = g*qchisq(0.99, df = h)
+abline(h = chi2lim, col = "orange", lty = 2, lwd = 2)
+abline(h = chi2lim99, col = "red3", lty = 2, lwd = 2)
+```
+
+Looking at this measure, we do see that there is one individual who is further away from the model by exceeding even the second confidence line. However, this excess is not very large and due to the high lack of observations we are faced with, we will not take any action with this individual, despite therefore risking that the predictive model deviates a little. 
+
+### CREATION OF THE MULTIPLE LINEAR REGRESSION MODEL
+
+Firstly, for the creation of the regression model we need the response variable to be numerical. This is possible in our case because the categories are ordinal and we have them already numbered ordinally. 
+Next, we incorporate the values of the principal components of the PCA for each individual together with their response to the treatment (response variable), so that we can enter them into the model and see the results. 
+  
+
+```{r}
+datosComponentes <- data.frame(cbind(res.pca$ind$contrib, df$primera_eval_num))
+names(datosComponentes)[7] <- "primera_eval"
+datosComponentes[, 1:K] <- sapply(datosComponentes[, 1:K], as.numeric)
+
+modelo <- lm(primera_eval ~ ., data = datosComponentes)
+summary(modelo)
+
+```
+
+As can be seen in the model results, none of the explanatory variables we have introduced (PCA results) is significant in predicting treatment response. All of them are far away from a significance of 5%. Only the first latent variable and the third one come closer to a confidence level of 10%, but they do not achieve it either. 
+
+Furthermore, if we look at the residual standard error, it is quite high (0.74) for the short range between responses (1-3). This means that it can deviate in the projection by about plus or minus 0.74 hundredths. In a problem where the answer should be as accurate as possible due to the field to which it belongs (lung cancer in medicine), this is a considerably high value. 
+
+Finally, the variance explained by the model (around 20%) is very low, which is not surprising as the 6 variables obtained after the PCA only explained 60% of the relationship between the variables, but it is still a very poor figure. 
+
+```{r,warning=FALSE}
+plot(datosComponentes$primera_eval, fitted(modelo), 
+     xlab = "Observaciones", ylab = "Predicciones", 
+     main = "Modelo Lineal: Observaciones vs Predicciones")
+abline(lm(primera_eval ~ ., data = datosComponentes), col = "red")
+```
+
+All in all, it has been shown that the use of a linear model for this problem is of little use due to the high error it achieves, as well as the little it manages to relate to the answer.  
+
+`
